@@ -1,0 +1,212 @@
+---
+title: "Hiretrack System Architecture Deep Dive"
+sidebarTitle: "Architecture"
+description: "Explore Hiretrack's monorepo layout, AI data pipeline, real-time Socket.io protocol, job system, and dual-auth model from end to end."
+---
+
+Hiretrack is designed as two closely coordinated applications that live in a single repository: an Express REST API that owns all AI orchestration, data persistence, and background services, and a React SPA that consumes those APIs and handles the real-time interview session through a Socket.io connection. This page walks through every major system layer — from the moment a PDF is uploaded to the moment a scored report is delivered — so you can orient yourself in the codebase quickly.
+
+## Monorepo Structure
+
+The repository root contains a lightweight `package.json` whose only runtime dependency is `concurrently`. Its scripts (`npm run install:all`, `npm run dev`) coordinate the two sub-applications without any bundler or workspace tooling at the root level.
+
+```text
+AI-Interviewer/
+├── package.json                  # Root dev scripts (concurrently)
+├── backend/
+│   └── src/
+│       ├── server.js             # HTTP server bootstrap, Redis, schedulers, Socket.io
+│       ├── app.js                # Express config — middleware stack and route registration
+│       ├── socket.js             # Socket.io live interview behavior
+│       ├── config/               # DB, Cloudinary, Groq, Redis, Winston logger
+│       ├── controllers/          # HTTP request handlers (auth, resume, interview, session, jobs, admin)
+│       ├── services/             # AI, RAG, chunking, optimizer, job sync, Adzuna
+│       ├── models/               # Mongoose schemas (User, Resume, Interview, Session, Job, …)
+│       ├── routes/               # Express router definitions
+│       ├── middleware/           # Auth, admin auth, RBAC, validation, uploads, error handler
+│       ├── scripts/              # Operational scripts (seedAdmin.js)
+│       └── utils/                # AppError, JWT helpers, Adzuna client, normalizer, cache helpers
+└── frontend/
+    └── src/
+        ├── main.jsx              # React bootstrap — QueryClient, Router, context providers
+        ├── App.jsx               # Route tree and route guards (candidate + admin)
+        ├── pages/                # LandingPage, Dashboard, Interview, Session, Jobs, Profile, Admin
+        ├── components/           # Reusable UI components
+        ├── layouts/              # AuthLayout, DashboardLayout, AdminLayout
+        ├── hooks/                # Custom data and behavior hooks
+        ├── services/             # Axios API wrappers (api.js, admin.service.js)
+        ├── store/                # Zustand auth store
+        ├── context/              # AdminAuthContext, AppContext
+        └── lib/                  # Axios clients with token refresh interceptors
+```
+
+### Entry points
+
+`backend/src/server.js` is responsible for everything that must happen at process startup: loading environment variables, creating the HTTP server from the Express `app`, connecting Redis, registering Socket.io on the same HTTP server, and starting the background job schedulers. Express configuration (middleware, routes, error handler) lives entirely in `backend/src/app.js` so it can be imported independently during testing.
+
+## AI Data Flow
+
+The complete journey from a raw PDF to a scored interview report passes through these stages:
+
+```text
+Resume PDF Upload
+  → Cloudinary storage
+  → Text extraction (pdf-parse)
+  → Resume parsing with Groq
+  → Semantic chunking (LangChain)
+  → OpenAI embeddings (text-embedding-3-small)
+  → In-memory vector store
+  → RAG retrieval (cosine similarity + section boost)
+  → Question generation (Groq Llama 3.3)
+  → Session answers
+  → Per-answer evaluation (Groq)
+  → Final scored report
+```
+
+<Note>
+  The vector store is held **in memory** and is not persisted to a durable database. Embeddings are regenerated on each generation request rather than being read from a persistent vector database. This keeps the infrastructure simple but means embedding state is lost on server restart.
+</Note>
+
+## Backend Layers
+
+### Config (`src/config/`)
+
+Centralises all external service clients and connection logic. Each module is imported once and reused across the application:
+
+| File | Responsibility |
+|---|---|
+| `db.js` | Mongoose connection to MongoDB |
+| `cloudinary.js` | Cloudinary SDK initialisation |
+| `groq.js` | Groq SDK client |
+| `redis.js` | ioredis client with `REDIS_ENABLED` guard |
+| `logger.js` | Winston logger (console + file transports) |
+
+### Routes (`src/routes/`)
+
+Route files map URL prefixes to controller functions. All routes are mounted in `app.js` under `/api/`:
+
+| Prefix | Scope |
+|---|---|
+| `/api/auth` | Registration, login, token refresh, current user, logout |
+| `/api/users` | Profile, password change, dashboard statistics |
+| `/api/resumes` | Upload, parse, list, delete, set default, chunk preview |
+| `/api/interviews` | Create, generate questions, retrieve, list, delete |
+| `/api/sessions` | Start session, submit answers, complete session, fetch results |
+| `/api/jobs` | Listings, live search, categories, resume-based recommendations |
+| `/api/admin` | Full admin CRUD — users, jobs, interviews, sessions, analytics, settings, prompts, logs |
+| `/api/health` | Liveness probe (`GET /api/health`) |
+
+### Controllers (`src/controllers/`)
+
+Controllers own the HTTP boundary: they parse request parameters, call the appropriate service, and return a structured JSON response. They do not contain business logic. Admin controllers cover a wider surface including analytics, audit logs, system prompts, scraper configuration, and plan management.
+
+### Services (`src/services/`)
+
+Services contain all business logic and external integrations:
+
+| Service | What it does |
+|---|---|
+| `ai.service.js` | Groq LLM orchestration — resume parsing, question generation, per-answer evaluation, final report synthesis |
+| `rag.service.js` | Builds OpenAI embeddings for resume and job-description chunks, performs cosine-similarity retrieval with section-aware ranking, and supplies the retrieved context to generation calls |
+| `chunking.service.js` | Splits resume text and job descriptions into semantically meaningful chunks using LangChain text splitters |
+| `optimizer.service.js` | Rewrites and expands interview queries before retrieval to improve RAG recall |
+| `jobSearchService.js` | Unified job search — query optimisation, Adzuna requests, result normalisation, deduplication, Redis caching, pagination, and stale-result fallback |
+| `jobMatchService.js` | Compares parsed resume skills against job requirements to produce ranked recommendations |
+| `adzuna.service.js` / `adzunaService.js` | Adzuna live search path and scheduled synchronisation path (two separate responsibilities) |
+| `jobSyncService.js` | Fetches and stores Adzuna jobs in MongoDB for offline availability |
+| `jobSyncScheduler.js` | Runs `jobSyncService` on a node-cron schedule (every 3 hours) |
+| `jobCleanupService.js` | Deactivates stale job listings on a daily cron schedule |
+| `postgresJobService.js` | PostgreSQL-backed job access with MongoDB fallback for deployments that use a relational job store |
+
+### Models (`src/models/`)
+
+Core Mongoose schemas:
+
+- **User** — identity, credentials, roles, credit balance, premium state, and usage counters.
+- **Resume** — Cloudinary metadata, extracted text, parsed structured data, and owner reference.
+- **Interview** — job details, configuration, generated question subdocuments, and status.
+- **Session** — submitted answers, per-answer scores, completion state, and final report.
+- **Job** — normalised job listings from Adzuna or manual sync.
+- **SystemPrompt** — admin-configurable LLM prompts used by `socket.js` and AI services.
+- **AuditLog**, **ScraperConfig**, **ScraperLog**, **SystemSetting** — operational and administrative records.
+
+### Middleware (`src/middleware/`)
+
+| Middleware | Role |
+|---|---|
+| `auth.middleware.js` | Validates bearer JWT, loads the user, checks account status, detects post-password-change invalidation |
+| `adminAuth.middleware.js` | Separate JWT validation for admin requests |
+| `rbac.js` | Role-based access control for `admin` and `super_admin` roles |
+| `validation.js` | express-validator rule sets for request bodies |
+| `upload.js` | Multer + Cloudinary Storage for resume file uploads |
+| `requestLogger.js` | Per-request structured logging |
+| `errorHandler.js` | Global error handler — maps `AppError` instances and unexpected errors to consistent JSON responses |
+
+### Utils (`src/utils/`)
+
+Shared helpers including `AppError` (typed error class), JWT sign/verify wrappers, Adzuna HTTP client with retry and circuit-breaker logic, result normalisation, deduplication, and cache key utilities.
+
+## Real-Time Interview Protocol
+
+Socket.io is initialised in `backend/src/socket.js` and attached to the same Node.js HTTP server that Express listens on. This means no separate WebSocket port is needed.
+
+**Connection:**
+The client (React frontend via `socket.io-client`) connects to `http://localhost:5000`. The Socket.io server is configured with the same CORS origin as the Express middleware (`CLIENT_URL`).
+
+**Live answer event flow:**
+
+```text
+Client                                    Server (socket.js)
+  │                                             │
+  │  emit("live_answer", {                      │
+  │    questionText,                            │
+  │    answerText,                              │
+  │    expectedKeywords                         │
+  │  })                                         │
+  │ ─────────────────────────────────────────► │
+  │                                             │  Build interviewer prompt
+  │                                             │  Call Groq (llama-3.3-70b-versatile, stream=true)
+  │                                             │
+  │  ◄──── emit("ai_chunk", "<token>") ─────── │  (repeated for each streamed token)
+  │  ◄──── emit("ai_chunk", "<token>") ─────── │
+  │                                             │
+  │  ◄──── emit("ai_complete") ─────────────── │  Stream finished
+  │                                             │
+  │  ◄──── emit("ai_error", "<message>") ───── │  (only on failure)
+```
+
+The model used for streaming is `llama-3.3-70b-versatile` with `temperature: 0.5` and `max_tokens: 150`, producing short conversational follow-ups. The system prompt is loaded from the `SystemPrompt` MongoDB collection (category: `interview`) so administrators can customise interviewer tone without a code deployment.
+
+## Job System
+
+Hiretrack maintains three parallel data paths for job listings:
+
+1. **Live Adzuna search** (`/api/jobs/search`) — real-time queries to the Adzuna REST API with query optimisation, normalisation, deduplication, score ranking, Redis caching (configurable TTL), automatic retries, and a circuit-breaker. Falls back to cached/stale results if Adzuna is unavailable.
+
+2. **Database-backed listings** (`/api/jobs`) — the primary path used by the frontend job board. Attempts PostgreSQL if `DATABASE_URL` is configured, then falls back to the MongoDB `Job` collection. These listings are kept current by the background sync scheduler.
+
+3. **Scheduled synchronisation** — `jobSyncScheduler.js` runs `jobSyncService` every **3 hours** using node-cron to pull fresh listings from Adzuna and upsert them into MongoDB. `jobCleanupService.js` runs **daily** to deactivate listings that have passed their expiry threshold.
+
+**Resume-based recommendations** are produced by `jobMatchService.js`, which compares the skills parsed from the candidate's resume against the requirements stored in each job document and returns a ranked shortlist.
+
+## Authentication Model
+
+Hiretrack uses two completely separate authentication contexts, each with its own JWT secrets, middleware, and frontend handling:
+
+### Candidate auth
+
+- Handled by `auth.middleware.js`.
+- Issues a short-lived **access token** (default 7 days, configurable via `JWT_EXPIRE`) and a long-lived **refresh token** (default 30 days, `JWT_REFRESH_EXPIRE`).
+- The frontend Axios client in `frontend/src/lib/axios.js` attaches the access token as a `Bearer` header and automatically requests a new access token using the refresh token when a 401 is received.
+- User identity and authentication state are managed in a Zustand store.
+
+### Admin auth
+
+- Handled by `adminAuth.middleware.js` and `rbac.js`.
+- Admin users carry a `role` field (`admin` or `super_admin`) on their `User` document. The RBAC middleware checks this field against route-level permission requirements.
+- The frontend uses a separate `AdminAuthContext` and `adminAxios` client that are entirely isolated from the candidate session — an admin login does not affect candidate session state, and vice versa.
+- Admin routes are guarded at the React Router level under the `/admin` prefix.
+
+<Note>
+  Socket.io connections are authenticated via CORS origin matching only. The `live_answer` event handler does not independently verify a JWT. For production deployments exposed beyond a trusted local network, add socket-level authentication (e.g., pass the access token as a handshake auth parameter and verify it inside the `connection` handler in `socket.js`).
+</Note>

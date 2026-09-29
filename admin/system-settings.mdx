@@ -1,0 +1,454 @@
+---
+title: "System Settings — Hiretrack Admin"
+sidebarTitle: "System Settings"
+description: "Configure global platform behaviour — general settings, AI model parameters, storage providers, feature flags, subscription plans, payments, and analytics."
+---
+
+System settings allow admins to configure global platform behaviour — general application metadata, AI model parameters, storage providers, rate limiting, feature flags, subscription plans, and payment management. All settings are persisted in the `SystemSetting` MongoDB collection and take effect without restarting the server. The collection self-seeds with sensible defaults if no document exists yet.
+
+<Tip>
+API rate limiting is controlled by the `security.rateLimits` settings object. You can also override the defaults at the environment level by setting `RATE_LIMIT_WINDOW_MS` (milliseconds) and `RATE_LIMIT_MAX` (maximum requests per window) in your `.env` file before server start.
+</Tip>
+
+---
+
+## Settings
+
+### Retrieve settings — `GET /api/admin/settings`
+
+Returns the current `SystemSetting` document. If none exists, default values are auto-created and returned.
+
+```http
+GET /api/admin/settings
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "settings": {
+    "general": {
+      "appName": "AI Interviewer",
+      "logo": "",
+      "theme": "dark",
+      "maintenanceMode": false,
+      "supportEmail": "support@interview.ai",
+      "supportPhone": "+1 (555) 019-2834",
+      "socialLinks": {
+        "github": "",
+        "twitter": "",
+        "linkedin": ""
+      }
+    },
+    "security": {
+      "jwtExpiry": "7d",
+      "apiKeys": {
+        "groq": "",
+        "stripe": "",
+        "adzunaId": "",
+        "adzunaKey": ""
+      },
+      "rateLimits": {
+        "windowMs": 900000,
+        "maxRequests": 100
+      }
+    },
+    "ai": {
+      "model": "llama-3.3-70b-versatile",
+      "temperature": 0.5,
+      "maxTokens": 1024
+    },
+    "storage": {
+      "provider": "local",
+      "cloudinary": {
+        "cloudName": "",
+        "apiKey": "",
+        "apiSecret": ""
+      },
+      "aws": {
+        "bucket": "",
+        "region": "",
+        "accessKey": "",
+        "secretKey": ""
+      }
+    },
+    "featureFlags": {
+      "enableJobs": true,
+      "enableScraper": true,
+      "enableATS": true,
+      "enableCoach": true
+    }
+  }
+}
+```
+
+### Update settings — `PATCH /api/admin/settings`
+
+Requires the `update:settings` permission. Send a partial settings object — only the fields you include are updated; everything else is preserved.
+
+```http
+PATCH /api/admin/settings
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+**Example: switch storage to Cloudinary and tune the AI model**
+
+```json
+{
+  "ai": {
+    "model": "llama-3.3-70b-versatile",
+    "temperature": 0.7,
+    "maxTokens": 2048
+  },
+  "storage": {
+    "provider": "cloudinary",
+    "cloudinary": {
+      "cloudName": "my-cloud",
+      "apiKey": "123456789",
+      "apiSecret": "abc..."
+    }
+  },
+  "featureFlags": {
+    "enableCoach": false
+  }
+}
+```
+
+**Settings reference**
+
+| Path | Type | Default | Description |
+|------|------|---------|-------------|
+| `general.appName` | string | `AI Interviewer` | Platform name shown in the UI |
+| `general.theme` | `dark` \| `light` \| `custom` | `dark` | Default UI theme |
+| `general.maintenanceMode` | boolean | `false` | Puts the platform into maintenance mode |
+| `general.supportEmail` | string | — | Contact email shown to candidates |
+| `security.jwtExpiry` | string | `7d` | Access token expiry (e.g. `1h`, `7d`) |
+| `security.apiKeys.groq` | string | — | Groq API key for Llama 3.3 inference |
+| `security.apiKeys.stripe` | string | — | Stripe secret key for payment processing |
+| `security.apiKeys.adzunaId` | string | — | Adzuna application ID for job scraping |
+| `security.apiKeys.adzunaKey` | string | — | Adzuna application key for job scraping |
+| `security.rateLimits.windowMs` | integer | `900000` | Rate limit window in milliseconds (default 15 min) |
+| `security.rateLimits.maxRequests` | integer | `100` | Maximum requests per window per IP |
+| `ai.model` | string | `llama-3.3-70b-versatile` | Groq model identifier |
+| `ai.temperature` | float | `0.5` | Inference temperature (0 – 2.0) |
+| `ai.maxTokens` | integer | `1024` | Maximum tokens per Groq completion |
+| `storage.provider` | `local` \| `cloudinary` \| `s3` | `local` | Active file storage backend |
+| `featureFlags.enableJobs` | boolean | `true` | Enable/disable the job board feature |
+| `featureFlags.enableScraper` | boolean | `true` | Enable/disable the Adzuna scraper |
+| `featureFlags.enableATS` | boolean | `true` | Enable/disable ATS resume scoring |
+| `featureFlags.enableCoach` | boolean | `true` | Enable/disable the career coach feature |
+
+---
+
+## Subscription plans
+
+Plans define the credit packages and feature sets that candidates can purchase. Plans are soft-deleted (archived) rather than hard-deleted to preserve historical billing integrity.
+
+### List all plans — `GET /api/admin/plans`
+
+Returns a paginated list of plans sorted by price (descending). By default only non-archived plans are returned.
+
+```http
+GET /api/admin/plans?page=1&limit=10&archived=false
+Authorization: Bearer <admin_access_token>
+```
+
+| Query parameter | Values | Description |
+|-----------------|--------|-------------|
+| `page` | integer | Page number (default `1`) |
+| `limit` | integer | Results per page (default `10`) |
+| `archived` | `true` \| `false` \| `all` | Filter by archive status (default: non-archived) |
+
+### Create a plan — `POST /api/admin/plans`
+
+Requires the `update:settings` permission.
+
+```http
+POST /api/admin/plans
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Pro Monthly",
+  "price": 29.99,
+  "durationDays": 30,
+  "credits": 50,
+  "features": ["Unlimited interviews", "AI career coach", "Priority support"],
+  "coupons": [{ "code": "LAUNCH20", "discountPct": 20 }],
+  "directDiscount": 0,
+  "isPublished": true
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | ✅ | Plan display name |
+| `price` | ✅ | Plan price in USD |
+| `durationDays` | ✅ | Number of days the plan remains active |
+| `credits` | ✅ | Interview credits granted on purchase |
+| `features` | optional | Array of feature description strings |
+| `coupons` | optional | Array of coupon code objects |
+| `directDiscount` | optional | Flat discount amount applied at checkout |
+| `isPublished` | optional | Whether the plan is visible to candidates (default `true`) |
+
+### Get a plan — `GET /api/admin/plans/:id`
+
+```http
+GET /api/admin/plans/64c...
+Authorization: Bearer <admin_access_token>
+```
+
+Returns the full plan document with the `postedBy` admin populated.
+
+### Update a plan — `PATCH /api/admin/plans/:id`
+
+Requires the `update:settings` permission. Send only the fields to change.
+
+```http
+PATCH /api/admin/plans/64c...
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "price": 24.99,
+  "credits": 60,
+  "isPublished": false
+}
+```
+
+### Delete (archive) a plan — `DELETE /api/admin/plans/:id`
+
+Requires the `update:settings` permission. Sets `isArchived: true` and `isPublished: false` — the plan record is **not** removed from the database so historical transaction records remain valid.
+
+```http
+DELETE /api/admin/plans/64c...
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "message": "Plan archived successfully."
+}
+```
+
+### Plan statistics — `GET /api/admin/plans/stats`
+
+```http
+GET /api/admin/plans/stats
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "totalPlans": 5,
+    "activePlans": 3,
+    "premiumUsers": 93,
+    "totalUserCredits": 2840
+  }
+}
+```
+
+---
+
+## Payments
+
+<Note>
+The current implementation includes full UI scaffolding and database models for payment management, and the `refundTransaction` endpoint correctly marks transactions as refunded and revokes candidate premium status. However, **Stripe webhook integration may not be fully wired end-to-end**. Verify that real Stripe events are being received and processed before enabling payment features in production.
+</Note>
+
+### List transactions — `GET /api/admin/payments/transactions`
+
+Returns a paginated list of all transactions with candidate name/email and plan name populated. Supports filtering by status and searching by transaction ID or candidate name/email.
+
+```http
+GET /api/admin/payments/transactions?page=1&limit=12&status=success
+Authorization: Bearer <admin_access_token>
+```
+
+| Query parameter | Values | Description |
+|-----------------|--------|-------------|
+| `page` | integer | Page number (default `1`) |
+| `limit` | integer | Results per page (default `12`) |
+| `status` | `success` \| `failed` \| `refunded` | Filter by transaction status |
+| `search` | string | Match on transaction ID, candidate name, or email |
+
+```json
+{
+  "success": true,
+  "data": {
+    "transactions": [
+      {
+        "_id": "64d...",
+        "userId": { "name": "Jane Doe", "email": "jane@example.com" },
+        "planId": { "name": "Pro Monthly", "price": 29.99 },
+        "transactionId": "ch_stripe_A1B2C3D4",
+        "amount": 29.99,
+        "currency": "USD",
+        "status": "success",
+        "paymentMethod": "card",
+        "createdAt": "2025-01-14T15:30:00.000Z"
+      }
+    ],
+    "total": 148,
+    "page": 1,
+    "pages": 13
+  }
+}
+```
+
+### Payment statistics — `GET /api/admin/payments/stats`
+
+```http
+GET /api/admin/payments/stats
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "totalRevenue": 8431.50,
+    "successfulSales": 312,
+    "refundedSales": 18,
+    "failedSales": 7,
+    "totalRefunded": 539.82
+  }
+}
+```
+
+### Issue a refund — `POST /api/admin/payments/transactions/:id/refund`
+
+Requires the `refund:payments` permission. Marks the transaction as `refunded`, records the `refundReason`, sets `refundedAt`, and revokes the candidate's `isPremium` status.
+
+```http
+POST /api/admin/payments/transactions/64d.../refund
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "reason": "Customer requested cancellation within 7-day window."
+}
+```
+
+```json
+{
+  "success": true,
+  "message": "Refund successfully completed and processed. Premium status revoked.",
+  "transaction": {
+    "_id": "64d...",
+    "status": "refunded",
+    "refundReason": "Customer requested cancellation within 7-day window.",
+    "refundedAt": "2025-01-15T11:00:00.000Z"
+  }
+}
+```
+
+<Info>
+Attempting to refund an already-refunded or a failed transaction returns a `400` error. Only transactions with `status: "success"` are eligible for refund.
+</Info>
+
+### Webhook delivery logs — `GET /api/admin/payments/webhooks`
+
+Returns paginated Stripe webhook delivery records stored in the `WebhookLog` collection.
+
+```http
+GET /api/admin/payments/webhooks?page=1&limit=12
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "logs": [
+      {
+        "_id": "64e...",
+        "provider": "stripe",
+        "eventType": "charge.succeeded",
+        "payload": { "id": "evt_1", "type": "charge.succeeded", "amount": 2999 },
+        "status": "processed",
+        "createdAt": "2025-01-14T15:30:05.000Z"
+      }
+    ],
+    "total": 155,
+    "page": 1,
+    "pages": 13
+  }
+}
+```
+
+---
+
+## Analytics
+
+### Platform analytics — `GET /api/admin/analytics/stats`
+
+Returns platform-wide aggregations including user growth, session activity, subscription conversion rates, revenue trends, and job listing trends. All trend data is returned as a daily time-series filling in zero-count days so charts render without gaps.
+
+```http
+GET /api/admin/analytics/stats?range=30d
+Authorization: Bearer <admin_access_token>
+```
+
+| Query parameter | Values | Default |
+|-----------------|--------|---------|
+| `range` | `7d` \| `30d` \| `90d` \| `1y` | `30d` |
+
+```json
+{
+  "success": true,
+  "data": {
+    "metrics": {
+      "totalCandidates": 482,
+      "premiumCandidates": 93,
+      "conversionRate": 19.29,
+      "totalJobs": 156,
+      "activeSessionsCount": 3871,
+      "completedSessionsCount": 2944,
+      "completionRate": 76.06,
+      "averageMockScore": 74.2
+    },
+    "trends": {
+      "users":    [{ "date": "2025-01-01", "count": 4 }, { "date": "2025-01-02", "count": 7 }],
+      "revenue":  [{ "date": "2025-01-01", "amount": 119.97 }],
+      "sessions": [{ "date": "2025-01-01", "count": 28 }],
+      "jobs":     [{ "date": "2025-01-01", "count": 12 }]
+    },
+    "retention": [
+      { "cohort": "Week 0 (Start)", "rate": 100 },
+      { "cohort": "Week 1", "rate": 72.5 },
+      { "cohort": "Week 2", "rate": 58.0 },
+      { "cohort": "Week 3", "rate": 45.2 },
+      { "cohort": "Week 4", "rate": 38.9 }
+    ]
+  }
+}
+```
+
+**Metrics reference**
+
+| Field | Description |
+|-------|-------------|
+| `totalCandidates` | All registered candidate accounts |
+| `premiumCandidates` | Candidates with active premium status |
+| `conversionRate` | `(premiumCandidates / totalCandidates) × 100` — free-to-premium conversion percentage |
+| `totalJobs` | Active (non-archived) job listings |
+| `activeSessionsCount` | All session records regardless of status |
+| `completedSessionsCount` | Sessions with `status: "completed"` |
+| `completionRate` | `(completedSessions / totalSessions) × 100` |
+| `averageMockScore` | Mean `overallScore` across all completed sessions |
+| `trends.users` | Daily new candidate registrations within the selected range |
+| `trends.revenue` | Daily successful transaction totals within the selected range |
+| `trends.sessions` | Daily session run counts within the selected range |
+| `trends.jobs` | Daily new job listing counts within the selected range |
+| `retention` | Simulated 5-week cohort retention curve |

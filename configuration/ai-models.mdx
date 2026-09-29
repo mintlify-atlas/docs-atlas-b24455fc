@@ -1,0 +1,186 @@
+---
+title: "AI Models and RAG Pipeline Configuration"
+sidebarTitle: "AI Models"
+description: "Configure Groq and OpenAI in Hiretrack: LLM completions, temperature presets, the RAG embedding pipeline, and admin-overridable system prompts."
+---
+
+Hiretrack uses two AI providers — Groq for LLM completions and OpenAI for text embeddings — which together power the RAG pipeline and interview evaluation. Groq's `llama-3.3-70b-versatile` model handles every chat completion task (question generation, answer evaluation, resume parsing, and live streaming), while OpenAI's `text-embedding-3-small` model converts resume and job-description text into vector representations used for context retrieval. Neither provider is interchangeable in the current implementation.
+
+---
+
+## Groq (LLM Completions)
+
+### Model
+
+All chat completions in Hiretrack use:
+
+```
+llama-3.3-70b-versatile
+```
+
+The Groq client is initialised once in `backend/src/config/groq.js` using the `GROQ_API_KEY` environment variable:
+
+```js
+const Groq = require('groq-sdk');
+
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+
+module.exports = groq;
+```
+
+Obtain a free API key at [console.groq.com](https://console.groq.com) and set:
+
+```ini
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+### Temperature Presets by Task
+
+Each AI task in `ai.service.js` and `socket.js` uses a deliberate temperature setting tuned for that specific output type:
+
+<Tip>
+  Lower temperatures produce more deterministic, reproducible outputs — ideal when you need valid JSON or precise technical evaluation. Higher temperatures introduce more variety and creativity — appropriate for conversational follow-up questions and overall feedback prose. Never raise the temperature on tasks that parse their response as JSON; malformed output will cause a runtime error.
+</Tip>
+
+| Task | Temperature | `max_tokens` | JSON mode |
+|---|---|---|---|
+| Question generation | `0.7` | `4096` | ✅ `json_object` |
+| Direct question generation | `0.7` | _(default)_ | ✅ `json_object` |
+| Answer evaluation | `0.4` | `512` | ✅ `json_object` |
+| Overall session feedback | `0.5` | `1024` | ✅ `json_object` |
+| Resume & JD parsing | `0.2` | `2048` | ✅ `json_object` |
+| Strict technical evaluation | `0.2` | `1024` | ✅ `json_object` |
+| Grounding validation | `0.1` | `1024` | ✅ `json_object` |
+| Final evaluation report | `0.3` | `2048` | ✅ `json_object` |
+| Senior technical questions | `0.6` | `1024` | ❌ plain text |
+| Follow-up question | `0.5` | `512` | ❌ plain text |
+| Live interview streaming | `0.5` | `150` | ❌ streaming |
+
+### JSON Mode
+
+Every task whose response is parsed as JSON passes `response_format: { type: 'json_object' }` to the Groq API. This forces the model to emit syntactically valid JSON and prevents markdown fences or preamble text from breaking `JSON.parse()`. Plain-text tasks (numbered question lists, single follow-up questions) and the streaming task omit this option.
+
+### Live Streaming
+
+The Socket.io handler (`backend/src/socket.js`) uses Groq's streaming API. It emits:
+
+- `ai_chunk` — one streamed text fragment as it arrives
+- `ai_complete` — signals the response is finished
+- `ai_error` — signals a generation failure
+
+Streaming uses `temperature: 0.5` and `max_tokens: 150` to keep live follow-up responses concise and responsive.
+
+---
+
+## OpenAI Embeddings and the RAG Pipeline
+
+### Model
+
+Embeddings are generated using:
+
+```
+text-embedding-3-small
+```
+
+via the LangChain `@langchain/openai` package:
+
+```js
+const { OpenAIEmbeddings } = require('@langchain/openai');
+
+const embeddingsClient = new OpenAIEmbeddings({ modelName: 'text-embedding-3-small' });
+```
+
+Set your OpenAI key in the environment:
+
+```ini
+OPENAI_API_KEY=your_actual_openai_api_key_here
+```
+
+The RAG service throws `OPENAI_API_KEY is missing. Required for embedding generation.` at runtime if the key is absent.
+
+<Note>
+  The vector store is **in-memory only**. Embeddings are not persisted to a database; they are regenerated fresh for every interview generation request. This means there is no external vector database dependency (no Pinecone, Weaviate, or pgvector is required), but it also means each request incurs OpenAI embedding API calls proportional to the size of the resume and job description.
+</Note>
+
+### RAG Pipeline Steps
+
+The pipeline is orchestrated in `rag.service.js` and called by `ai.service.js` before question generation:
+
+<Steps>
+  <Step title="Semantic Chunking">
+    `buildSemanticChunks()` calls `chunkResumeAndJD()` to split the resume and job description into metadata-tagged segments, then `normalizeChunks()` to clean the content before embedding.
+  </Step>
+  <Step title="Embedding">
+    `createAndStoreEmbeddings()` sends all chunk texts to OpenAI in a single `embedDocuments()` call. The resulting vectors are held in memory alongside their chunk metadata.
+  </Step>
+  <Step title="Retrieval with Section Boosting">
+    Two retrieval goals are used simultaneously — one focused on technical skills and one focused on role responsibilities. For each goal, an optimised query vector is compared to every chunk vector using cosine similarity. The raw similarity score is multiplied by a section-specific boost weight, and the top-6 chunks (by boosted score) are selected.
+  </Step>
+  <Step title="Context Formatting">
+    Each selected chunk is labelled with its source type and section (e.g. `[RESUME › skills]`) and joined with separator lines. This formatted string is passed directly into the Groq question-generation prompt.
+  </Step>
+</Steps>
+
+### Section Boost Weights
+
+Chunks from sections that are more relevant to technical interview questions receive a higher multiplier during retrieval ranking:
+
+| Section key | Boost weight | Rationale |
+|---|---|---|
+| `skills` | `1.25` | Highest priority — direct skill match |
+| `experience` | `1.20` | Work history drives question depth |
+| `responsibility` | `1.20` | JD responsibilities align closely to questions |
+| `requirements` | `1.15` | Required qualifications from the JD |
+| `required_skills` | `1.15` | Explicit required skills from the JD |
+| `project` | `1.10` | Project-based questions are highly grounded |
+| `experience_requirement` | `1.10` | Years/level requirements from the JD |
+| `preferred_skills` | `1.05` | Nice-to-have skills |
+| `summary` | `1.00` | Neutral weight |
+| `certification` | `0.90` | Useful but lower priority |
+| `education` | `0.90` | Lower relevance for technical questions |
+| `publication` | `0.80` | Low relevance |
+| `general` | `0.85` | Fallback for unclassified content |
+| `overview` | `0.85` | Low-signal JD overview text |
+| `languages` | `0.70` | Spoken languages, low signal |
+| `benefits` | `0.70` | Not relevant to questions |
+| `interests` | `0.60` | Lowest priority |
+
+---
+
+## Admin-Overridable System Prompts
+
+Hiretrack loads AI system prompts from the database at runtime, allowing administrators to tune AI behaviour without touching source code. At startup (or per-request), the service calls:
+
+```js
+const promptDoc = await SystemPrompt.findOne({ category });
+return promptDoc ? promptDoc.content : defaultPrompt;
+```
+
+If no database record exists for a category, the service falls back to the hardcoded default prompt defined in `ai.service.js`.
+
+### Prompt Categories
+
+| Category | Used by | Default behaviour |
+|---|---|---|
+| `resume_parser` | `parseResumeAndJD()` | Extracts name, skills, experience, projects, education from the resume; extracts role, required skills, preferred skills, and responsibilities from the JD |
+| `ats_scorer` | `evaluateAnswer()` | Scores a candidate answer 1–10 on correctness, clarity, and depth; returns `{ score, feedback }` |
+| `feedback_report` | `generateOverallFeedback()` | Produces an overall score (1–100), strengths, weaknesses, and improvement tips for the complete session |
+| `interview` | Interview generation flows | General interview generation guidance (category reserved for future prompt customisation) |
+
+### Updating a Prompt
+
+Admins with the `update:prompts` permission can update any prompt via the Admin Dashboard or directly through the API:
+
+```http
+PATCH /api/admin/prompts/:id
+Authorization: Bearer <adminAccessToken>
+Content-Type: application/json
+
+{
+  "content": "You are an expert resume parser. Extract...\n\nReturn strict JSON only."
+}
+```
+
+The `${variable}` placeholder syntax is supported in prompt templates. For example, `${jobTitle}` and `${answerText}` in the `ats_scorer` prompt are substituted by `formatPrompt()` before the request is sent to Groq.

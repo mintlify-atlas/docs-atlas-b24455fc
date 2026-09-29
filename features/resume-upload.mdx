@@ -1,0 +1,192 @@
+---
+title: "Resume Upload and AI Parsing in Hiretrack"
+sidebarTitle: "Resume Upload"
+description: "Upload PDF, DOC, or DOCX resumes to Hiretrack. Groq parses them into structured JSON, and the content is semantically chunked for RAG-powered interview generation."
+---
+
+Hiretrack accepts resumes in PDF, DOC, and DOCX formats. When you upload a file, the platform runs a multi-stage processing pipeline: Multer handles the multipart upload, Cloudinary stores the raw file, `pdf-parse` extracts the plain text, and Groq's `llama-3.3-70b-versatile` model transforms that text into a structured JSON object containing your name, skills, work experience, projects, and education. The structured data is then semantically chunked and tagged so it can be embedded and retrieved via the RAG pipeline during interview question generation.
+
+## Upload pipeline
+
+<Steps>
+  <Step title="Multipart upload">
+    The client sends a `multipart/form-data` POST request. Multer validates the file type and enforces a **5 MB size limit**. Only `application/pdf`, `application/msword`, and `application/vnd.openxmlformats-officedocument.wordprocessingml.document` MIME types are accepted.
+  </Step>
+  <Step title="Cloudinary storage">
+    The file is streamed directly to Cloudinary under the `ai-interview/resumes` folder using `multer-storage-cloudinary`. The resulting `fileUrl`, `publicId`, and metadata are persisted in MongoDB.
+  </Step>
+  <Step title="Text extraction">
+    For PDF files, `pdf-parse` fetches the Cloudinary URL, converts the response to a Node.js `Buffer`, and extracts raw text. The text is capped at **8 000 characters** to stay within model context limits. Non-PDF formats (DOC, DOCX) are stored but text extraction is skipped; you can trigger a manual re-parse with a job description via `POST /api/resumes/:id/parse`.
+  </Step>
+  <Step title="AI structured parsing">
+    If text was extracted successfully, Hiretrack calls `parseResumeAndJD` in `ai.service.js`. Groq parses the raw text into a structured JSON object at `temperature: 0.2` for maximum fidelity. The result is stored in the `parsedData` field on the resume document.
+  </Step>
+  <Step title="Semantic chunking">
+    The extracted text is split into metadata-tagged chunks (max ~300 tokens / ~1 200 characters each) by `chunking.service.js`. Each chunk carries `{ type: "resume", section: string }` metadata that the RAG retriever uses to boost high-signal sections during question generation.
+  </Step>
+  <Step title="Default resume">
+    If this is the user's first resume, it is automatically set as the default. Subsequent resumes can be promoted via `PATCH /api/resumes/:id/default`.
+  </Step>
+</Steps>
+
+## Upload endpoint
+
+```bash
+POST /api/resumes/upload
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+```
+
+```bash
+curl -X POST https://your-hiretrack-api.com/api/resumes/upload \
+  -H "Authorization: Bearer <your_jwt_token>" \
+  -F "resume=@/path/to/your-resume.pdf"
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "resume": {
+    "_id": "64f1a2b3c4d5e6f7a8b9c0d1",
+    "userId": "64f1a2b3c4d5e6f7a8b9c000",
+    "originalName": "your-resume.pdf",
+    "fileUrl": "https://res.cloudinary.com/your-cloud/raw/upload/ai-interview/resumes/your-resume.pdf",
+    "fileSize": 142576,
+    "mimeType": "application/pdf",
+    "parseStatus": "parsed",
+    "isParsed": true,
+    "isDefault": true,
+    "parsedData": { ... },
+    "createdAt": "2024-09-01T10:00:00.000Z"
+  }
+}
+```
+
+## Parsed resume JSON shape
+
+Groq extracts the following structure from the raw resume text. Fields that cannot be found are returned as `null` or an empty array rather than hallucinated values.
+
+```json
+{
+  "name": "Ada Lovelace",
+  "skills": ["Python", "React", "Node.js", "PostgreSQL", "Docker"],
+  "experience": [
+    {
+      "role": "Senior Backend Engineer",
+      "company": "Acme Corp",
+      "duration": "Jan 2022 – Present",
+      "tech": ["Node.js", "MongoDB", "Redis", "AWS"]
+    },
+    {
+      "role": "Software Engineer",
+      "company": "Beta Ltd",
+      "duration": "Jun 2019 – Dec 2021",
+      "tech": ["Python", "Django", "PostgreSQL"]
+    }
+  ],
+  "projects": [
+    {
+      "title": "Real-Time Chat App",
+      "tech": ["Socket.io", "React", "Node.js"],
+      "description": "Built a scalable real-time messaging platform supporting 10 000 concurrent users."
+    }
+  ],
+  "education": "BSc Computer Science, University of London, 2019"
+}
+```
+
+<ResponseField name="name" type="string">
+  Full name extracted from the resume header or contact section.
+</ResponseField>
+<ResponseField name="skills" type="string[]">
+  Flat array of technical skills, programming languages, and tools.
+</ResponseField>
+<ResponseField name="experience" type="object[]">
+  Ordered list of work history entries.
+  <Expandable title="Experience entry fields">
+    <ResponseField name="role" type="string">Job title or position held.</ResponseField>
+    <ResponseField name="company" type="string">Employer name.</ResponseField>
+    <ResponseField name="duration" type="string">Employment period as free text (e.g. `"Jan 2022 – Present"`).</ResponseField>
+    <ResponseField name="tech" type="string[]">Technologies used in that role.</ResponseField>
+  </Expandable>
+</ResponseField>
+<ResponseField name="projects" type="object[]">
+  Personal or professional projects including title, tech stack, and a short description.
+</ResponseField>
+<ResponseField name="education" type="string | object">
+  Degree, institution, and graduation year. Returned as a string or structured object depending on the resume layout.
+</ResponseField>
+
+## Semantic chunking
+
+After parsing, the resume text is passed to `chunking.service.js` which splits it into chunks of at most 1 200 characters (≈ 300 tokens). The chunker detects section boundaries from common header patterns and labels each chunk with a section type:
+
+<CardGroup cols={3}>
+  <Card title="skills" icon="code">
+    Technical skills, core competencies, and tools sections.
+  </Card>
+  <Card title="experience" icon="briefcase">
+    Work history and professional background sections.
+  </Card>
+  <Card title="project" icon="folder">
+    Personal projects and key project descriptions.
+  </Card>
+  <Card title="education" icon="graduation-cap">
+    Academic qualifications and degrees.
+  </Card>
+  <Card title="summary" icon="user">
+    Career objective or profile introductions.
+  </Card>
+  <Card title="certification" icon="award">
+    Certifications, licenses, and achievements.
+  </Card>
+</CardGroup>
+
+Each chunk carries `{ type: "resume", section: "<label>" }` metadata. During RAG retrieval, sections like `skills` and `experience` receive higher cosine-similarity boost weights (1.25× and 1.20× respectively), so they are more likely to be retrieved as context for question generation.
+
+## Additional endpoints
+
+### List resumes
+
+```http
+GET /api/resumes
+Authorization: Bearer <token>
+```
+
+Returns all resumes for the authenticated user, sorted by most recently uploaded. Each object includes `isParsed`, `isDefault`, `fileUrl`, and the full `parsedData` when available.
+
+### Delete a resume
+
+```http
+DELETE /api/resumes/:id
+Authorization: Bearer <token>
+```
+
+Removes the resume document from MongoDB and calls `cloudinary.uploader.destroy` to delete the raw file from Cloudinary storage.
+
+### Set default resume
+
+```http
+PATCH /api/resumes/:id/default
+Authorization: Bearer <token>
+```
+
+Marks the specified resume as the default. A pre-save hook automatically clears the `isDefault` flag on all other resumes for the same user.
+
+### Re-parse with a job description
+
+```http
+POST /api/resumes/:id/parse
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "jobDescription": "We are looking for a Senior React Engineer..." }
+```
+
+Re-runs the Groq parser against the stored `extractedText`. Passing a `jobDescription` body field allows the parser to extract additional alignment data such as `required_skills` and `responsibilities` from the JD alongside the resume fields.
+
+<Note>
+  Supported formats are **PDF**, **DOC (`.doc`)**, and **DOCX (`.docx`)**. The maximum file size is **5 MB**. Files exceeding this limit are rejected with HTTP 400 before reaching Cloudinary. Text extraction is automatic for PDFs; DOC and DOCX files are stored and can be re-parsed later once a job description is provided.
+</Note>

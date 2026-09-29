@@ -1,0 +1,136 @@
+{
+  "projectType": "saas",
+  "projectName": "Hiretrack",
+  "projectDescription": "Hiretrack is an AI-powered mock interview platform that parses resumes, generates RAG-grounded interview questions, conducts real-time voice interviews via Socket.io, evaluates answers with Groq (Llama 3.3), and provides detailed performance feedback alongside AI-driven job recommendations.",
+  "theme": "luma",
+  "primaryColor": "#4f46e5",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/resume-upload",
+              "features/interview-setup",
+              "features/live-interview",
+              "features/evaluation-reports",
+              "features/job-board"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment-variables",
+              "configuration/authentication",
+              "configuration/ai-models"
+            ]
+          },
+          {
+            "group": "Admin Dashboard",
+            "pages": [
+              "admin/overview",
+              "admin/users-and-interviews",
+              "admin/prompts-and-templates",
+              "admin/system-settings"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api-reference/overview"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api-reference/auth",
+              "api-reference/resumes",
+              "api-reference/interviews",
+              "api-reference/sessions",
+              "api-reference/jobs",
+              "api-reference/users"
+            ]
+          },
+          {
+            "group": "Real-Time",
+            "pages": [
+              "api-reference/websocket"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "RAG-powered question generation grounded in resume and job description context",
+    "Real-time streaming interview feedback via Socket.io and Groq Llama 3.3",
+    "AI resume parsing — extracts skills, experience, projects, and education",
+    "Per-answer scoring and final interview report with strengths, weaknesses, and improvement tips",
+    "AI job recommendations matched against parsed resume skills",
+    "Live job board powered by Adzuna API with Redis caching",
+    "JWT-based authentication with access/refresh token rotation",
+    "Cloudinary-backed resume file storage",
+    "Admin dashboard with user management, prompt editing, analytics, and scraper control",
+    "Role-based access control (admin / super_admin)"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/register",
+    "POST /api/auth/login",
+    "POST /api/auth/refresh",
+    "GET /api/auth/me",
+    "POST /api/auth/logout",
+    "POST /api/resumes/upload",
+    "GET /api/resumes",
+    "DELETE /api/resumes/:id",
+    "POST /api/interviews",
+    "GET /api/interviews",
+    "GET /api/interviews/:id",
+    "POST /api/interviews/:id/generate",
+    "DELETE /api/interviews/:id",
+    "POST /api/sessions/start",
+    "GET /api/sessions",
+    "GET /api/sessions/:id",
+    "POST /api/sessions/:id/answer",
+    "POST /api/sessions/:id/complete",
+    "GET /api/jobs",
+    "GET /api/jobs/search",
+    "GET /api/jobs/recommended",
+    "GET /api/jobs/categories",
+    "GET /api/jobs/:id",
+    "POST /api/jobs/generate-questions",
+    "GET /api/users/dashboard",
+    "Socket.io event: live_answer",
+    "Socket.io event: ai_chunk",
+    "Socket.io event: ai_complete",
+    "Socket.io event: ai_error",
+    "GET /api/admin/stats",
+    "GET /api/admin/users",
+    "GET /api/admin/interviews",
+    "GET /api/admin/sessions",
+    "GET /api/admin/resumes",
+    "GET /api/admin/jobs",
+    "GET /api/admin/analytics/stats",
+    "GET /api/admin/prompts",
+    "PATCH /api/admin/prompts/:id",
+    "GET /api/admin/logs",
+    "GET /api/admin/settings",
+    "PATCH /api/admin/settings"
+  ]
+}

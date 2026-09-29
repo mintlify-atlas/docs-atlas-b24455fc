@@ -1,0 +1,395 @@
+---
+title: "Resume Endpoints — Upload, Parse, and Manage Resumes"
+sidebarTitle: "Resumes"
+description: "Upload PDF or Word resumes to Cloudinary, trigger AI-powered parsing, manage multiple resumes, and set a default for interview generation."
+---
+
+The resumes API manages candidate resume files throughout their lifecycle. When a resume is uploaded, Hiretrack stores the file in Cloudinary, extracts raw text from PDFs (up to 8 000 characters), and immediately runs an AI parsing pass with Groq to produce structured data — skills, experience, projects, and education — that is used by the interview and job-recommendation systems. A candidate may hold multiple resumes and designate one as the default for interview question generation.
+
+All resume endpoints require authentication. Every route under `/api/resumes` is protected by the `protect` middleware.
+
+---
+
+## Resume Object
+
+<ResponseField name="_id" type="string">
+  MongoDB ObjectId.
+</ResponseField>
+
+<ResponseField name="userId" type="string">
+  ObjectId of the owning user.
+</ResponseField>
+
+<ResponseField name="fileName" type="string">
+  Cloudinary-generated file name (used as the `publicId` for deletion).
+</ResponseField>
+
+<ResponseField name="originalName" type="string">
+  The original filename as uploaded by the client (e.g. `ada_lovelace_cv.pdf`).
+</ResponseField>
+
+<ResponseField name="fileUrl" type="string">
+  Cloudinary delivery URL for the raw file.
+</ResponseField>
+
+<ResponseField name="fileSize" type="number">
+  File size in bytes.
+</ResponseField>
+
+<ResponseField name="mimeType" type="string">
+  One of `application/pdf`, `application/msword`, or the `.docx` MIME type.
+</ResponseField>
+
+<ResponseField name="extractedText" type="string | null">
+  Raw text extracted from the document (truncated to 8 000 characters). `null` if extraction failed or the file is not a PDF.
+</ResponseField>
+
+<ResponseField name="parsedData" type="object | null">
+  AI-structured extraction result. Shape varies; typically contains `skills` (array of strings), `experience` (array of objects), `education` (array of objects), and `projects` (array of objects).
+</ResponseField>
+
+<ResponseField name="isParsed" type="boolean">
+  `true` when AI parsing completed successfully.
+</ResponseField>
+
+<ResponseField name="isDefault" type="boolean">
+  `true` for the resume used as context during interview question generation. Only one resume per user may be the default.
+</ResponseField>
+
+<ResponseField name="parseStatus" type="string">
+  Current parsing state: `pending`, `parsed`, or `failed`.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+---
+
+## Upload Resume
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/resumes/upload`
+
+🔒 **Requires authentication.**
+
+Accepts a `multipart/form-data` request with a single file field named `resume`. Hiretrack uploads the file to Cloudinary, extracts text from PDF files, and runs AI parsing immediately. If this is the user's first resume it is automatically set as the default.
+
+**Request (multipart/form-data)**
+
+<ParamField body="resume" type="file" required>
+  The resume file. Accepted types: `application/pdf`, `application/msword` (`.doc`), and `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (`.docx`). Configured by the upload middleware.
+</ParamField>
+
+**Response `201 Created`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="resume" type="object">
+  The newly created resume document (see Resume Object above).
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/resumes/upload \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -F "resume=@/path/to/ada_lovelace_cv.pdf"
+```
+
+```json
+{
+  "success": true,
+  "resume": {
+    "_id": "665b2a...",
+    "userId": "664a1f...",
+    "fileName": "resumes/ada_lovelace_cv_xk9f2.pdf",
+    "originalName": "ada_lovelace_cv.pdf",
+    "fileUrl": "https://res.cloudinary.com/demo/raw/upload/v1/resumes/ada_lovelace_cv_xk9f2.pdf",
+    "fileSize": 84231,
+    "mimeType": "application/pdf",
+    "extractedText": "Ada Lovelace\nSenior Software Engineer...",
+    "parsedData": {
+      "skills": ["Python", "TypeScript", "Machine Learning", "React"],
+      "experience": [
+        { "title": "Senior Software Engineer", "company": "TechCorp", "duration": "2021–2024" }
+      ],
+      "education": [
+        { "degree": "B.Sc. Computer Science", "institution": "University of London" }
+      ],
+      "projects": []
+    },
+    "isParsed": true,
+    "isDefault": true,
+    "parseStatus": "parsed",
+    "createdAt": "2024-11-01T12:00:00.000Z",
+    "updatedAt": "2024-11-01T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## List Resumes
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/resumes`
+
+🔒 **Requires authentication.**
+
+Returns all resumes belonging to the authenticated user, sorted newest-first.
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="count" type="number">
+  Number of resumes returned.
+</ResponseField>
+
+<ResponseField name="resumes" type="array">
+  Array of resume objects (see Resume Object above).
+</ResponseField>
+
+```bash
+curl -X GET http://localhost:5000/api/resumes \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "count": 2,
+  "resumes": [
+    {
+      "_id": "665b2a...",
+      "originalName": "ada_lovelace_cv.pdf",
+      "isDefault": true,
+      "parseStatus": "parsed",
+      "createdAt": "2024-11-01T12:00:00.000Z"
+    },
+    {
+      "_id": "665b1c...",
+      "originalName": "ada_lovelace_resume_2023.pdf",
+      "isDefault": false,
+      "parseStatus": "parsed",
+      "createdAt": "2024-09-10T08:30:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## Delete Resume
+
+<span style={{background:"#dc2626",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>DELETE</span> `/api/resumes/:id`
+
+🔒 **Requires authentication.**
+
+Permanently deletes a resume document from MongoDB and its corresponding file from Cloudinary. Returns `404` if the resume does not exist or belongs to a different user.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the resume to delete.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Resume deleted successfully."`
+</ResponseField>
+
+```bash
+curl -X DELETE http://localhost:5000/api/resumes/665b2a... \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "message": "Resume deleted successfully."
+}
+```
+
+---
+
+## Set Default Resume
+
+<span style={{background:"#d97706",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>PATCH</span> `/api/resumes/:id/default`
+
+🔒 **Requires authentication.**
+
+Marks the specified resume as the default. The pre-save hook automatically clears the `isDefault` flag on all other resumes for the same user, so only one resume is ever default at a time.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the resume to set as default.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Default resume updated."`
+</ResponseField>
+
+<ResponseField name="resume" type="object">
+  The updated resume document with `isDefault: true`.
+</ResponseField>
+
+```bash
+curl -X PATCH http://localhost:5000/api/resumes/665b2a.../default \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "message": "Default resume updated.",
+  "resume": {
+    "_id": "665b2a...",
+    "originalName": "ada_lovelace_cv.pdf",
+    "isDefault": true,
+    "parseStatus": "parsed"
+  }
+}
+```
+
+---
+
+## Re-parse Resume
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/resumes/:id/parse`
+
+🔒 **Requires authentication.**
+
+Re-runs the AI parsing pass on an already-uploaded resume. Optionally accepts a `jobDescription` body field to give the AI additional context, yielding richer alignment between the parsed resume and a specific role. The resume must have `extractedText` available; returns `400` otherwise.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the resume to re-parse.
+</ParamField>
+
+**Request body**
+
+<ParamField body="jobDescription" type="string">
+  Optional job description text. When provided, the AI parser uses it as context to surface skills and experience most relevant to the role.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="parsedData" type="object">
+  Updated structured extraction result with `skills`, `experience`, `education`, and `projects` arrays.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/resumes/665b2a.../parse \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{ "jobDescription": "We are looking for a senior backend engineer with Node.js and AWS experience..." }'
+```
+
+```json
+{
+  "success": true,
+  "parsedData": {
+    "skills": ["Node.js", "AWS", "TypeScript", "Docker", "PostgreSQL"],
+    "experience": [
+      { "title": "Senior Backend Engineer", "company": "TechCorp", "duration": "2021–2024" }
+    ],
+    "education": [
+      { "degree": "B.Sc. Computer Science", "institution": "University of London" }
+    ],
+    "projects": [
+      { "name": "API Gateway", "description": "Built a rate-limited API gateway on AWS Lambda" }
+    ]
+  }
+}
+```
+
+---
+
+## Chunk Preview
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/resumes/chunk-preview`
+
+🔒 **Requires authentication.**
+
+Debug endpoint that runs the semantic chunker on raw text and returns the metadata-tagged output. Useful for inspecting how resume and job-description text will be split before embedding. At least one of `resumeText` or `jobDescription` must be provided.
+
+**Request body**
+
+<ParamField body="resumeText" type="string">
+  Raw resume text to chunk.
+</ParamField>
+
+<ParamField body="jobDescription" type="string">
+  Raw job description text to chunk.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="summary" type="object">
+  Aggregate statistics: `totalChunks`, `resumeChunks`, `jdChunks`, `sectionsFound` (array of section labels), `avgTokensPerChunk`, `maxTokensInChunk`.
+</ResponseField>
+
+<ResponseField name="chunks" type="array">
+  Array of enriched chunk objects. Each chunk includes `index`, `content`, `normalizedContent`, `metadata` (type and section), `estimatedTokens`, and `charCount`.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/resumes/chunk-preview \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "resumeText": "Ada Lovelace\nSkills: Python, TypeScript...",
+    "jobDescription": "We need a senior engineer with Python experience..."
+  }'
+```
+
+```json
+{
+  "success": true,
+  "summary": {
+    "totalChunks": 8,
+    "resumeChunks": 5,
+    "jdChunks": 3,
+    "sectionsFound": ["skills", "experience", "job_description"],
+    "avgTokensPerChunk": 112,
+    "maxTokensInChunk": 210
+  },
+  "chunks": [
+    {
+      "index": 0,
+      "content": "Skills: Python, TypeScript, React...",
+      "normalizedContent": "skills python typescript react",
+      "metadata": { "type": "resume", "section": "skills" },
+      "estimatedTokens": 87,
+      "charCount": 340
+    }
+  ]
+}
+```

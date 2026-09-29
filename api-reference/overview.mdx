@@ -1,0 +1,142 @@
+---
+title: "Hiretrack REST API — Overview and Authentication"
+sidebarTitle: "Overview"
+description: "Complete reference for the Hiretrack REST API: base URLs, authentication, response envelopes, status codes, rate limiting, and pagination."
+---
+
+Hiretrack exposes a RESTful API mounted under `/api/*`. Every response is JSON. The API is built on Node.js and Express and uses MongoDB for persistence. JWT-based access tokens and refresh tokens guard protected resources. All current endpoints are grouped under six domain prefixes — auth, users, resumes, interviews, sessions, and jobs — and a restricted admin prefix that is outside the scope of this reference.
+
+## Base URL
+
+| Environment | Base URL |
+|---|---|
+| Local development | `http://localhost:5000` |
+| Frontend (Vite dev server) | `http://localhost:5173` |
+
+During local development the Vite dev server proxies every request starting with `/api` to `http://localhost:5000`, so your frontend code can call `/api/auth/login` without specifying the backend host. In production you should point your client to the deployed backend origin directly.
+
+## Health Check
+
+```http
+GET /api/health
+```
+
+Returns a liveness confirmation. No authentication required.
+
+**Response `200 OK`**
+
+```json
+{
+  "success": true,
+  "message": "OK",
+  "timestamp": "2024-11-01T12:00:00.000Z"
+}
+```
+
+## Authentication
+
+All protected endpoints require a `Bearer` token in the `Authorization` header. Obtain an access token from `POST /api/auth/login`.
+
+```bash
+curl -X GET http://localhost:5000/api/auth/me \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+Access tokens are short-lived JWTs signed with `JWT_SECRET`. When an access token expires, use `POST /api/auth/refresh` with your `refreshToken` to obtain a new one without re-authenticating.
+
+## Response Envelope
+
+Every response from the API follows a consistent shape:
+
+**Success**
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "message": "Optional human-readable message"
+}
+```
+
+**Error**
+
+```json
+{
+  "success": false,
+  "message": "Descriptive error message",
+  "errors": [
+    { "field": "email", "msg": "Please enter a valid email" }
+  ]
+}
+```
+
+The top-level `errors` array is only present on `422 Unprocessable Entity` validation failures.
+
+## HTTP Status Codes
+
+| Code | Meaning |
+|---|---|
+| `200 OK` | Request succeeded; body contains the result |
+| `201 Created` | Resource created successfully |
+| `400 Bad Request` | Malformed request or business-rule violation |
+| `401 Unauthorized` | Missing, invalid, or expired token |
+| `403 Forbidden` | Authenticated but not authorized (account deactivated or banned) |
+| `404 Not Found` | Resource does not exist or does not belong to the caller |
+| `422 Unprocessable Entity` | Validation errors; `errors` array is populated |
+| `429 Too Many Requests` | Rate limit exceeded |
+| `500 Internal Server Error` | Unexpected server-side failure |
+
+## Rate Limiting
+
+A rate limiter is applied to every `/api/` route. The defaults are **100 requests per 15-minute window per IP address**. Both values are configurable via environment variables:
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `RATE_LIMIT_WINDOW_MS` | `900000` (15 min) | Window length in milliseconds |
+| `RATE_LIMIT_MAX` | `100` | Maximum requests per window |
+
+When the limit is exceeded the API returns `429` with:
+
+```json
+{
+  "success": false,
+  "message": "Too many requests. Please try again later."
+}
+```
+
+Standard rate-limit headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`) are included in every response.
+
+## Pagination
+
+Endpoints that return lists accept `page` and `limit` query parameters and include pagination metadata in the response body.
+
+**Query parameters**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `page` | integer | `1` | Page number (1-based) |
+| `limit` | integer | `10` | Items per page |
+
+**Response pagination fields**
+
+```json
+{
+  "success": true,
+  "count": 10,
+  "total": 47,
+  "page": 1,
+  "totalPages": 5,
+  "data": [ ... ]
+}
+```
+
+## Route Groups
+
+| Method prefix | Base path | Description | Auth required |
+|---|---|---|---|
+| Multiple | `/api/auth` | Register, login, token refresh, current user, logout | Partial |
+| Multiple | `/api/users` | Profile, password change, dashboard statistics | ✅ Yes |
+| Multiple | `/api/resumes` | Upload, list, parse, set default, delete resumes | ✅ Yes |
+| Multiple | `/api/interviews` | Create interviews, generate questions, list, retrieve, delete | ✅ Yes |
+| Multiple | `/api/sessions` | Start sessions, submit answers, complete, list, retrieve | ✅ Yes |
+| Multiple | `/api/jobs` | DB listings, live Adzuna search, categories, recommendations, question generation | Partial |

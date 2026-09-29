@@ -1,0 +1,81 @@
+---
+title: "Welcome to Hiretrack: AI-Powered Mock Interviews"
+sidebarTitle: "Introduction"
+description: "Hiretrack is a full-stack AI interview platform that parses your resume, generates role-specific questions, streams real-time feedback, and scores every answer."
+---
+
+Hiretrack transforms interview preparation by combining a Retrieval-Augmented Generation pipeline, live streaming AI feedback, and a structured scoring engine into a single platform. After reading this documentation you will understand what Hiretrack does, how its AI pipeline connects your resume to a scored interview report, and where to go next to start building or using the platform.
+
+## What is Hiretrack?
+
+Hiretrack is an AI-powered mock interview platform built on the MERN stack. It removes the guesswork from interview preparation by generating questions that are grounded in your actual resume and the specific job role you are targeting. Instead of generic question banks, Hiretrack uses a RAG (Retrieval-Augmented Generation) pipeline — your resume is chunked, embedded with OpenAI's `text-embedding-3-small` model, and stored in a vector store so that Groq's Llama 3.3 model can retrieve the most relevant context before generating each question. Every answer you submit is evaluated in real time, and a final report with a score, identified strengths, and improvement guidance is produced at the end of each session.
+
+## The Problem It Solves
+
+Most candidates practice with static flashcard banks or generic mock questions that bear little relation to their own background or the role they are applying for. Hiretrack solves this by making the interview *contextual*: questions are dynamically generated from the intersection of the candidate's resume and the job description they configure. The live Socket.io streaming layer gives immediate, conversational feedback after each answer — the same kind of follow-up a human interviewer would give — and the per-answer evaluation provides actionable scores rather than vague encouragement.
+
+## Who It Is For
+
+- **Job seekers** who want structured, personalized interview practice before real interviews.
+- **Developers** who want to explore a production-grade MERN + AI architecture including RAG, streaming LLMs, and real-time WebSockets.
+- **Teams and educators** building interview coaching tools who need an open-source starting point.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card
+    title="Resume Upload & Parsing"
+    icon="file-pdf"
+    href="/features/resume-upload"
+  >
+    Upload a PDF resume. Hiretrack extracts text with `pdf-parse`, parses structured data with Groq, and stores the file on Cloudinary — all in a single request.
+  </Card>
+  <Card
+    title="Interview Setup"
+    icon="sliders"
+    href="/features/interview-setup"
+  >
+    Configure a role, job description, experience level, question types, and question count. The RAG pipeline retrieves the most relevant resume chunks and Groq Llama 3.3 generates your personalized question set.
+  </Card>
+  <Card
+    title="Live Interview"
+    icon="microphone"
+    href="/features/live-interview"
+  >
+    Answer questions in a timed session. Socket.io streams conversational follow-up responses from the AI interviewer in real time — one chunk at a time — so there is no waiting for a full round-trip.
+  </Card>
+  <Card
+    title="Evaluation Reports"
+    icon="chart-bar"
+    href="/features/evaluation-reports"
+  >
+    Every answer receives an AI-generated score and written feedback. At the end of the session a final report aggregates overall score, strengths, weaknesses, and improvement recommendations.
+  </Card>
+  <Card
+    title="Job Board"
+    icon="briefcase"
+    href="/features/job-board"
+  >
+    Browse live job listings powered by the Adzuna API, with Redis caching for fast repeated searches. Resume-based recommendations match your parsed skills to open roles.
+  </Card>
+</CardGroup>
+
+## Tech Stack
+
+| Layer | Technologies |
+|---|---|
+| **Backend** | Node.js 18+, Express 4, MongoDB (Mongoose 8), Winston logging |
+| **AI / LLM** | Groq SDK (`llama-3.3-70b-versatile`), LangChain, OpenAI embeddings (`text-embedding-3-small`) |
+| **Real-time** | Socket.io 4 — attached directly to the HTTP server |
+| **Frontend** | React 18, Vite 5, React Router v6, Zustand, TanStack React Query, Tailwind CSS |
+| **Auth** | JWT access tokens + refresh tokens (jsonwebtoken + bcryptjs), separate admin RBAC |
+| **Storage** | Cloudinary (file storage), Multer (upload handling) |
+| **Cache** | Redis via ioredis — job search results, API response caching |
+| **Job Search** | Adzuna REST API with scheduled sync, MongoDB-backed listings, optional PostgreSQL |
+| **Security** | Helmet, CORS, express-rate-limit, gzip compression |
+
+## License
+
+<Note>
+  Hiretrack is released under the [MIT License](https://github.com/aftabalam999/AI-Interviewer/blob/main/LICENSE). You are free to use, modify, and distribute the source code for personal and commercial projects.
+</Note>

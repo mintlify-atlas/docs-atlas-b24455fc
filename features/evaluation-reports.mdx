@@ -1,0 +1,206 @@
+---
+title: "Evaluation Reports and AI Scoring in Hiretrack"
+sidebarTitle: "Evaluation Reports"
+description: "Hiretrack generates per-answer scores and an overall session report using Groq. Each answer is rated 1–10 with feedback; the session report covers strengths, weaknesses, and improvement tips."
+---
+
+After a session completes, Hiretrack runs two levels of AI evaluation powered by Groq's `llama-3.3-70b-versatile` model: a per-answer score with constructive feedback for each response, and a holistic session report that synthesises every answer into an overall score, a strengths list, a weaknesses list, and actionable improvement tips. Both levels are generated in a single call to `POST /api/sessions/:id/complete` and stored permanently on the session document.
+
+## Per-answer evaluation
+
+Each non-skipped answer is evaluated by `evaluateAnswer` in `ai.service.js`. The model receives the question text, the candidate's answer, the expected keywords for that question, and the job title. It assesses three dimensions:
+
+| Dimension | What is assessed |
+|-----------|-----------------|
+| **Correctness** | Factual accuracy and alignment with the expected keywords |
+| **Clarity** | How clearly and concisely the answer is communicated |
+| **Depth** | The level of technical detail and insight demonstrated |
+
+### Answer evaluation JSON shape
+
+```json
+{
+  "score": 8,
+  "feedback": "Your answer correctly identified write-through caching and TTL configuration, demonstrating solid Redis knowledge. The explanation was clear and concise. To reach a higher score, consider also addressing cache stampede prevention and how you monitored hit rates in production."
+}
+```
+
+<ResponseField name="score" type="number">
+  Integer from **1 to 10**. Skipped questions receive a score of `0` without calling the AI.
+</ResponseField>
+<ResponseField name="feedback" type="string">
+  Constructive paragraph explaining the evaluation result based on correctness, clarity, and depth. Written from the perspective of an interviewer.
+</ResponseField>
+
+These fields are stored as `aiScore` and `aiFeedback` on each answer subdocument within the session.
+
+## Overall session report
+
+After all per-answer evaluations complete, `generateOverallFeedback` sends a summary of every question, score, and answer excerpt to Groq. The model produces a holistic report at `temperature: 0.5`.
+
+### Overall report JSON shape
+
+```json
+{
+  "overallScore": 74,
+  "strengths": [
+    "Strong understanding of Redis caching patterns including TTL and write-through strategies",
+    "Structured, clear communication throughout technical explanations"
+  ],
+  "weaknesses": [
+    "Limited depth on distributed locking and concurrency edge cases",
+    "Behavioral answers lacked specific outcome metrics from past experience"
+  ],
+  "improvementTips": [
+    "Study distributed systems concepts such as the CAP theorem and consensus algorithms",
+    "Practise STAR-format storytelling with quantified results for behavioral questions",
+    "Review MongoDB aggregation pipelines and indexing strategies for query optimisation"
+  ]
+}
+```
+
+<ResponseField name="overallScore" type="number">
+  Integer from **1 to 100** representing the candidate's overall performance across all answers in the session.
+</ResponseField>
+<ResponseField name="strengths" type="string[]">
+  Areas where the candidate demonstrated competence or stood out positively.
+</ResponseField>
+<ResponseField name="weaknesses" type="string[]">
+  Gaps in knowledge or communication style that could cost points in a real interview.
+</ResponseField>
+<ResponseField name="improvementTips" type="string[]">
+  Specific, actionable recommendations for what to study or practise before the next interview.
+</ResponseField>
+
+If the AI call fails, `overallScore` falls back to an automatic calculation: the average of all `aiScore` values scaled to 100.
+
+## Strict evaluation mode
+
+For deeper analysis, `evaluateStrictAnswer` provides a richer breakdown that ties every point of feedback directly to the retrieved context used to generate the question. This mode is stricter — vague or generic answers are penalized even when they happen to include correct keywords.
+
+### Strict evaluation JSON shape
+
+```json
+{
+  "score": 6,
+  "correctness": "medium",
+  "strengths": [
+    "Correctly identified Redis as the appropriate tool for session caching"
+  ],
+  "weaknesses": [
+    "Did not explain the eviction policy or how cache size was managed"
+  ],
+  "missed_concepts": [
+    "LRU eviction",
+    "maxmemory-policy configuration",
+    "Redis Sentinel for high availability"
+  ],
+  "improvement_suggestions": [
+    "Research Redis eviction policies (LRU, LFU, volatile-lru) and when to use each",
+    "Explain how you sized the Redis instance relative to your dataset"
+  ]
+}
+```
+
+<ResponseField name="score" type="number">
+  Integer from **0 to 10**.
+</ResponseField>
+<ResponseField name="correctness" type="string">
+  `low`, `medium`, or `high`. Reflects how accurately the answer maps to the expected concepts in the RAG-retrieved context.
+</ResponseField>
+<ResponseField name="strengths" type="string[]">
+  Specific concepts or phrases in the answer that were correct and well-expressed.
+</ResponseField>
+<ResponseField name="weaknesses" type="string[]">
+  Specific shortcomings identified in the answer.
+</ResponseField>
+<ResponseField name="missed_concepts" type="string[]">
+  Concepts present in the retrieved context that the candidate failed to address.
+</ResponseField>
+<ResponseField name="improvement_suggestions" type="string[]">
+  Targeted recommendations tied to the missed concepts.
+</ResponseField>
+
+## Retrieve a completed session
+
+```http
+GET /api/sessions/:id
+Authorization: Bearer <token>
+```
+
+Returns the full session document including all answers with their `aiScore` and `aiFeedback`, the `overallScore`, `strengths`, `areasForImprovement`, and `recommendedResources` arrays. The linked interview is populated with `jobTitle`, `company`, `experienceLevel`, and the full `questions` array.
+
+```json
+{
+  "success": true,
+  "session": {
+    "_id": "64f4d5e6f7a8b9c0d4e5f6a7",
+    "status": "completed",
+    "startedAt": "2024-09-01T10:10:00.000Z",
+    "completedAt": "2024-09-01T10:45:00.000Z",
+    "totalTimeTaken": 2340,
+    "overallScore": 74,
+    "strengths": ["..."],
+    "areasForImprovement": ["..."],
+    "recommendedResources": ["..."],
+    "answers": [
+      {
+        "questionId": "64f3c4d5e6f7a8b9c0d3e4f5",
+        "questionText": "Describe your Redis caching strategy...",
+        "answerText": "I used Redis with a write-through strategy...",
+        "aiScore": 8,
+        "aiFeedback": "Strong answer covering TTL and write-through patterns...",
+        "timeTaken": 95,
+        "skipped": false
+      }
+    ],
+    "interviewId": {
+      "jobTitle": "Senior Backend Engineer",
+      "company": "Acme Corp",
+      "experienceLevel": "senior"
+    }
+  }
+}
+```
+
+## List all past sessions
+
+```http
+GET /api/sessions
+Authorization: Bearer <token>
+```
+
+Returns a paginated list of all sessions for the authenticated user, sorted newest first. The `answers` array is excluded from list responses for performance — fetch a specific session with `GET /api/sessions/:id` to view per-answer scores.
+
+| Query param | Default | Description |
+|-------------|---------|-------------|
+| `page` | `1` | Page number |
+| `limit` | `10` | Results per page |
+
+```json
+{
+  "success": true,
+  "count": 5,
+  "total": 5,
+  "page": 1,
+  "totalPages": 1,
+  "sessions": [
+    {
+      "_id": "64f4d5e6f7a8b9c0d4e5f6a7",
+      "status": "completed",
+      "overallScore": 74,
+      "totalTimeTaken": 2340,
+      "completedAt": "2024-09-01T10:45:00.000Z",
+      "interviewId": {
+        "jobTitle": "Senior Backend Engineer",
+        "company": "Acme Corp",
+        "experienceLevel": "senior"
+      }
+    }
+  ]
+}
+```
+
+<Tip>
+  The overall report and per-answer scores are generated exactly once — when `POST /api/sessions/:id/complete` is called. There is no way to re-generate the report for an existing completed session. If you want fresh feedback, start a new session from the same interview (or create a new interview) and complete it again.
+</Tip>

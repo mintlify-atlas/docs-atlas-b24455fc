@@ -1,0 +1,461 @@
+---
+title: "Users & Interviews — Hiretrack Admin"
+sidebarTitle: "Users & Interviews"
+description: "View, update, and bulk-act on candidates; manage all interviews, sessions, resumes, job listings, and the Adzuna job scraper from the admin panel."
+---
+
+Admins can view, update, and bulk-act on every candidate account on the platform. Beyond user management, this section covers full oversight of all interviews, practice sessions, resume files, job listings, and the background Adzuna scraper that continuously populates the job board — without requiring direct database access.
+
+---
+
+## Users
+
+### List all users — `GET /api/admin/users`
+
+Returns a paginated list of all users with rich filtering and sorting support.
+
+**Query parameters**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `page` | integer | `1` | Page number |
+| `limit` | integer | `20` | Results per page |
+| `search` | string | — | Case-insensitive match on `name` or `email` |
+| `role` | string | `all` | Filter by `candidate`, `admin`, `super_admin`, etc. |
+| `status` | string | `all` | `active`, `inactive`, `banned`, or `premium` |
+| `sortBy` | string | `createdAt` | Field to sort by |
+| `sortDir` | string | `desc` | Sort direction: `asc` or `desc` |
+
+**Example request**
+
+```http
+GET /api/admin/users?page=1&limit=20&status=premium&sortBy=createdAt&sortDir=desc
+Authorization: Bearer <admin_access_token>
+```
+
+**Example response**
+
+```json
+{
+  "success": true,
+  "data": {
+    "users": [
+      {
+        "_id": "64a...",
+        "name": "Jane Doe",
+        "email": "jane@example.com",
+        "role": "candidate",
+        "isActive": true,
+        "isBanned": false,
+        "isPremium": true,
+        "credits": 15,
+        "createdAt": "2025-01-10T08:00:00.000Z"
+      }
+    ],
+    "total": 482,
+    "page": 1,
+    "pages": 25
+  }
+}
+```
+
+### Get a single user — `GET /api/admin/users/:id`
+
+Returns full user details including populated resumes, recent sessions (with interview titles), and aggregate counts for interviews, sessions, and resumes.
+
+```http
+GET /api/admin/users/64a...
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "_id": "64a...",
+      "name": "Jane Doe",
+      "email": "jane@example.com",
+      "role": "candidate",
+      "isActive": true,
+      "isPremium": true,
+      "credits": 15,
+      "resumes": [...],
+      "sessions": [...]
+    },
+    "interviewCount": 8,
+    "sessionCount": 22,
+    "resumeCount": 3
+  }
+}
+```
+
+### Update a user — `PATCH /api/admin/users/:id`
+
+Allows updating user fields including role, active status, ban status, premium status, and credits. You can set credits to an absolute value using `credits`, or increment/decrement them with `creditsChange`.
+
+```http
+PATCH /api/admin/users/64a...
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "isActive": true,
+  "isPremium": true,
+  "creditsChange": 10
+}
+```
+
+**Updatable fields**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Update the user's display name |
+| `role` | string | Change the user's platform role |
+| `isActive` | boolean | Activate or deactivate the account |
+| `isBanned` | boolean | Ban or unban the account |
+| `isPremium` | boolean | Grant or revoke premium status |
+| `credits` | integer | Set the credit balance directly |
+| `creditsChange` | integer | Increment (positive) or decrement (negative) existing credits |
+
+<Note>
+The super admin account (seeded via `seedAdmin.js`) is protected — you cannot change its role or ban it through this endpoint.
+</Note>
+
+### Delete a user — `DELETE /api/admin/users/:id`
+
+<Warning>
+This route requires the `super_admin` role. Deleting a user performs a **cascade delete** of all their interviews, sessions, and resumes. This action is irreversible.
+</Warning>
+
+```http
+DELETE /api/admin/users/64a...
+Authorization: Bearer <super_admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "message": "User and all associated data deleted."
+}
+```
+
+### Bulk user actions — `POST /api/admin/users/bulk`
+
+Apply an action to multiple users in a single request. The protected super admin account is automatically excluded from bulk operations.
+
+```http
+POST /api/admin/users/bulk
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "userIds": ["64a...", "64b...", "64c..."],
+  "action": "deactivate"
+}
+```
+
+**Supported bulk actions**
+
+| Action | Effect |
+|--------|--------|
+| `activate` | Sets `isActive: true` for all targeted users |
+| `deactivate` | Sets `isActive: false` for all targeted users |
+| `ban` | Sets `isBanned: true` for all targeted users |
+| `unban` | Sets `isBanned: false` for all targeted users |
+| `delete` | Cascade-deletes users and all their interviews, sessions, and resumes |
+
+---
+
+## Interviews
+
+### List all interviews — `GET /api/admin/interviews`
+
+Returns a paginated list of every interview configuration across all users, with the owning user's name and email populated.
+
+```http
+GET /api/admin/interviews?page=1&limit=20
+Authorization: Bearer <admin_access_token>
+```
+
+| Query parameter | Default | Description |
+|-----------------|---------|-------------|
+| `page` | `1` | Page number |
+| `limit` | `20` | Results per page |
+
+### Delete an interview — `DELETE /api/admin/interviews/:id`
+
+Deletes the interview and **cascade-deletes all sessions** that belong to it.
+
+```http
+DELETE /api/admin/interviews/64b...
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "message": "Interview and its sessions deleted."
+}
+```
+
+---
+
+## Sessions
+
+### List all sessions — `GET /api/admin/sessions`
+
+Returns a paginated list of all session runs across every user, populated with candidate name/email and the parent interview's job title and company.
+
+```http
+GET /api/admin/sessions?page=1&limit=20
+Authorization: Bearer <admin_access_token>
+```
+
+### Delete a session — `DELETE /api/admin/sessions/:id`
+
+Deletes a single session record. Does not affect the parent interview or other sessions.
+
+```http
+DELETE /api/admin/sessions/64c...
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "message": "Session deleted."
+}
+```
+
+---
+
+## Resumes
+
+### List all resumes — `GET /api/admin/resumes`
+
+Returns a paginated list of all uploaded resume files with the owning user populated.
+
+```http
+GET /api/admin/resumes?page=1&limit=20
+Authorization: Bearer <admin_access_token>
+```
+
+### Delete a resume — `DELETE /api/admin/resumes/:id`
+
+Removes the resume document from the database. Cloudinary stores the actual file — ensure any corresponding Cloudinary asset is also cleaned up if persistent storage management is required.
+
+```http
+DELETE /api/admin/resumes/64d...
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "message": "Resume deleted."
+}
+```
+
+---
+
+## Jobs
+
+The jobs section lets admins manually create and manage job listings that appear on the candidate-facing job board, independently of the automated scraper.
+
+### List all jobs — `GET /api/admin/jobs`
+
+Returns a paginated, filterable list of job listings. Pinned jobs always appear at the top of each page.
+
+| Query parameter | Default | Description |
+|-----------------|---------|-------------|
+| `page` | `1` | Page number |
+| `limit` | `15` | Results per page |
+| `search` | — | Match on `title` or `company` |
+| `contractType` | `all` | Filter by `full_time`, `part_time`, `contract`, or `internship` |
+| `filterType` | `all` | `featured`, `pinned`, or `archived` |
+| `sortBy` | `createdAt` | Sort field |
+| `sortDir` | `desc` | `asc` or `desc` |
+
+### Create a job — `POST /api/admin/jobs`
+
+Manually post a job listing. By default the endpoint rejects duplicates (same title + company + location). Pass `ignoreDuplicate: true` to override.
+
+```http
+POST /api/admin/jobs
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "title": "Senior Frontend Engineer",
+  "company": "Acme Corp",
+  "location": "Remote",
+  "description": "We are looking for a React expert...",
+  "salaryMin": 90000,
+  "salaryMax": 130000,
+  "contractType": "full_time",
+  "category": "Engineering",
+  "isFeatured": true,
+  "isPinned": false,
+  "applyUrl": "https://acme.com/jobs/42"
+}
+```
+
+### Update a job — `PATCH /api/admin/jobs/:id`
+
+Update any field of an existing job listing, including archiving (`isArchived: true`) or featuring it (`isFeatured: true`).
+
+### Delete a job — `DELETE /api/admin/jobs/:id`
+
+Permanently removes the job listing record.
+
+```http
+DELETE /api/admin/jobs/64e...
+Authorization: Bearer <admin_access_token>
+```
+
+### Bulk job actions — `POST /api/admin/jobs/bulk`
+
+Apply an action to multiple job listings at once.
+
+```json
+{
+  "jobIds": ["64e...", "64f..."],
+  "action": "archive"
+}
+```
+
+**Supported bulk actions**
+
+| Action | Effect |
+|--------|--------|
+| `archive` / `unarchive` | Toggle `isArchived` flag |
+| `feature` / `unfeature` | Toggle `isFeatured` flag |
+| `pin` / `unpin` | Toggle `isPinned` flag |
+| `delete` | Permanently remove all selected listings |
+
+### Job statistics — `GET /api/admin/jobs/stats`
+
+```http
+GET /api/admin/jobs/stats
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "totalJobs": 156,
+    "pinnedJobs": 4,
+    "featuredJobs": 12,
+    "archivedJobs": 23,
+    "contractTypes": [
+      { "_id": "full_time", "count": 98 },
+      { "_id": "contract", "count": 34 }
+    ]
+  }
+}
+```
+
+---
+
+## Scraper control
+
+The Hiretrack job scraper uses the Adzuna API to automatically pull job postings into the local MongoDB `Job` collection on a configurable schedule.
+
+### Scraper status — `GET /api/admin/scraper/status`
+
+Returns the current `ScraperConfig` document and whether the in-memory scheduler interval is running.
+
+```http
+GET /api/admin/scraper/status
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "config": {
+      "status": "idle",
+      "isActiveScheduler": true,
+      "scrapeInterval": 60,
+      "maxJobs": 20,
+      "keywords": ["software engineer", "frontend developer"],
+      "country": "us",
+      "lastRun": "2025-01-15T06:00:00.000Z"
+    },
+    "schedulerRunning": true
+  }
+}
+```
+
+### Trigger a manual scrape — `POST /api/admin/scraper/run`
+
+Requires the `run:scraper` permission. Kicks off an immediate background scrape without waiting for the next scheduled interval. Returns `202 Accepted` immediately; the scrape runs asynchronously.
+
+```http
+POST /api/admin/scraper/run
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "message": "Manual scraping task triggered successfully in the background."
+}
+```
+
+<Note>
+The scraper iterates through each configured keyword, fetches results from Adzuna, deduplicates by title + company + location, and creates new `Job` documents. Previously archived matching jobs are automatically unarchived.
+</Note>
+
+### Pause / resume the scheduler
+
+Both routes require the `run:scraper` permission.
+
+```http
+POST /api/admin/scraper/pause
+POST /api/admin/scraper/resume
+Authorization: Bearer <admin_access_token>
+```
+
+- **Pause** — sets `isActiveScheduler: false` and clears the in-memory interval.
+- **Resume** — sets `isActiveScheduler: true` and re-initialises the interval at the configured `scrapeInterval` (in minutes).
+
+### Scraper logs — `GET /api/admin/scraper/logs`
+
+Returns a paginated history of every scraper run with start/end times, status, job counts, and any error messages.
+
+```http
+GET /api/admin/scraper/logs?page=1&limit=10
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "logs": [
+      {
+        "_id": "64f...",
+        "startTime": "2025-01-15T06:00:00.000Z",
+        "endTime": "2025-01-15T06:00:14.000Z",
+        "status": "success",
+        "jobsImported": 8,
+        "jobsUpdated": 1,
+        "duplicateCount": 14
+      }
+    ],
+    "total": 42,
+    "page": 1,
+    "pages": 5
+  }
+}
+```

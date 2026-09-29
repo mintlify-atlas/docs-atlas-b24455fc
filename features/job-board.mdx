@@ -1,0 +1,201 @@
+---
+title: "Job Board, Search, and AI Recommendations in Hiretrack"
+sidebarTitle: "Job Board"
+description: "Browse database-backed listings, search Adzuna live with Redis caching and circuit breaker protection, and get AI-powered job recommendations matched against your parsed resume skills."
+---
+
+Hiretrack includes a full job board powered by three data paths: a MongoDB-backed listing store for locally managed and scheduled-sync jobs, a live Adzuna API search pipeline with Redis caching and circuit breaker protection, and an AI recommendation engine that compares your parsed resume skills against active job requirements to surface the best matches. You can also generate targeted interview questions directly from any job description.
+
+## Three job data paths
+
+<CardGroup cols={3}>
+  <Card title="Database listings" icon="database">
+    `GET /api/jobs` — paginated MongoDB (with optional PostgreSQL fallback) listings, filtered by keyword, location, category, contract type, and minimum salary.
+  </Card>
+  <Card title="Live Adzuna search" icon="magnifying-glass">
+    `GET /api/jobs/search` — real-time Adzuna API query with query optimization, Redis caching (15 min TTL), circuit breaker, automatic retries, and stale fallback.
+  </Card>
+  <Card title="AI recommendations" icon="stars">
+    `GET /api/jobs/recommended` — authenticated endpoint that matches your parsed resume skills against active job listings, returning only jobs with ≥ 60% skill overlap.
+  </Card>
+</CardGroup>
+
+## GET /api/jobs — database listings
+
+```http
+GET /api/jobs
+Authorization: Bearer <token> (optional)
+```
+
+Returns active job listings from MongoDB. When a PostgreSQL connection is configured, `postgresJobService` is attempted first and falls back to MongoDB automatically.
+
+| Query param | Type | Description |
+|-------------|------|-------------|
+| `page` | integer ≥ 1 | Page number (default `1`) |
+| `limit` | integer 1–100 | Results per page (default `10`) |
+| `keyword` | string | Full-text search across title, company, description, and skills |
+| `location` | string | Filter by location field |
+| `category` | string | Filter by job category |
+| `contractType` | string | `full_time`, `part_time`, `contract`, `internship`, or `temporary` |
+| `salaryMin` | number | Minimum salary filter |
+
+## GET /api/jobs/search — live Adzuna search
+
+```http
+GET /api/jobs/search?q=python+backend+remote&page=1&results=20
+```
+
+Requires either `q` (natural-language query) or `what` (keyword) — the endpoint returns HTTP 422 if neither is provided. All other parameters are optional.
+
+| Query param | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `q` | string | — | Natural-language query parsed by the query optimizer (max 500 chars) |
+| `what` | string | — | Keyword override; takes precedence over `q` when both are provided |
+| `where` | string | — | Location string (e.g. `"London"`, `"Remote"`) |
+| `page` | integer 1–50 | `1` | Page number |
+| `results` | integer 1–50 | `20` | Results per page |
+| `country` | string | — | 2-letter ISO country code (e.g. `"gb"`, `"us"`) |
+| `sortBy` | string | `relevance` | `date`, `salary`, or `relevance` |
+| `sortDir` | string | `down` | `up` (ascending) or `down` (descending) |
+| `salaryMin` | integer | — | Minimum salary |
+| `salaryMax` | integer | — | Maximum salary |
+| `category` | string | — | Adzuna category tag |
+| `contract` | string | — | `full_time`, `part_time`, `contract`, or `permanent` |
+
+### Search response shape
+
+```json
+{
+  "page": 1,
+  "total": 120,
+  "results": [
+    {
+      "id": "4897123456",
+      "title": "Senior Python Backend Engineer",
+      "company": "FinTech Ltd",
+      "location": "London",
+      "salary": "£80,000 – £100,000",
+      "summary": "We are looking for an experienced Python engineer to build scalable microservices...",
+      "apply_url": "https://www.adzuna.co.uk/jobs/details/4897123456",
+      "skills": ["Python", "Django", "PostgreSQL", "Redis"],
+      "posted_at": "2024-09-01T08:00:00.000Z",
+      "score": 0.92
+    }
+  ],
+  "totalPages": 6,
+  "hasNextPage": true,
+  "rawQuery": "python backend remote",
+  "queryMeta": { "parser": "rule-based", "ambiguityScore": 10 },
+  "duplicatesRemoved": 3
+}
+```
+
+### Redis caching
+
+Search results are cached at two levels:
+
+| Level | Cache key format | TTL |
+|-------|-----------------|-----|
+| Sorted list | `jobs:sorted:{sha256(query_params)}` | 15 minutes |
+| Per-page result | `jobs:{sha256(query_params)}:page:{page}` | 15 minutes |
+| Job detail | `job:{job_id}` | 1 hour |
+| Stale fallback | `jobs:stale:{sha256(query_params)}` | 7 days |
+
+The SHA-256 hash is computed from all non-empty query parameters sorted alphabetically, so `{ what: "python", where: "london" }` and `{ where: "london", what: "python" }` produce the same cache key. When Redis is unavailable, every cache method returns `null` silently and the request falls through to a live Adzuna call — no error reaches the client.
+
+If the Adzuna API fails entirely and a stale cache entry exists, the stale results are served with `isFallback: true` in the response metadata.
+
+## GET /api/jobs/recommended — AI recommendations
+
+```http
+GET /api/jobs/recommended
+Authorization: Bearer <token>
+```
+
+Requires authentication. Hiretrack fetches your default resume (or most recently updated resume if no default is set) and reads the `parsedData.skills` array. The `matchUserToJobs` service then:
+
+1. Queries all active jobs from MongoDB (`isActive: true`).
+2. For each job, extracts its `skills` array. If the array is empty, it scans the job `description` for known technology keywords.
+3. Calculates a match percentage: `(overlapping skills / total job skills) × 100`.
+4. Returns only jobs with **≥ 60% match**, sorted by highest match score first.
+
+```json
+{
+  "success": true,
+  "results": [
+    {
+      "_id": "64f5e6f7a8b9c0d5e6f7a8b9",
+      "title": "Backend Node.js Engineer",
+      "company": "SaaS Startup",
+      "location": "Remote",
+      "skills": ["Node.js", "MongoDB", "Redis", "Docker"],
+      "matchScore": 85,
+      "contractType": "full_time",
+      "applyUrl": "https://..."
+    }
+  ]
+}
+```
+
+If your resume has not been uploaded or has not been parsed yet, the endpoint returns an empty results array with a prompt to upload and parse your resume.
+
+## GET /api/jobs/categories
+
+```http
+GET /api/jobs/categories?country=gb
+```
+
+Returns the list of available Adzuna job categories for the specified country. Use the `tag` field from the response as the `category` parameter in search requests.
+
+| Query param | Description |
+|-------------|-------------|
+| `country` | Optional 2-letter ISO country code |
+
+## POST /api/jobs/generate-questions
+
+```http
+POST /api/jobs/generate-questions
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+Given a job title and description, Groq generates **5 targeted interview questions** (3 technical, 2 behavioral) for that specific role. This is useful for quick preparation before applying to a job you found on the board, without creating a full interview configuration.
+
+```json
+{
+  "jobTitle": "Senior React Engineer",
+  "jobDescription": "We are building a design system for enterprise SaaS. You will architect reusable component libraries using React, TypeScript, and Storybook, and collaborate closely with design and backend teams."
+}
+```
+
+```json
+{
+  "success": true,
+  "questions": [
+    "How have you approached designing a reusable component library in React with TypeScript, and what patterns did you use to enforce type safety across consumers?",
+    "Describe a time you resolved a critical accessibility gap in a design system. What tools did you use and what was the impact?",
+    "How would you structure Storybook stories to support both component documentation and visual regression testing?",
+    "Walk me through how you handled versioning and breaking changes in a shared UI component library used by multiple teams.",
+    "Tell me about a situation where you had to balance speed of delivery with the need for thorough component testing. How did you navigate that trade-off?"
+  ]
+}
+```
+
+## Background schedulers
+
+Hiretrack runs two background jobs that keep the job database fresh:
+
+<CardGroup cols={2}>
+  <Card title="Job sync" icon="rotate">
+    Runs every **3 hours**. Fetches recent listings from Adzuna and upserts them into MongoDB by `adzunaId`. New jobs are created; existing jobs are updated.
+  </Card>
+  <Card title="Job cleanup" icon="trash">
+    Runs **daily**. Deactivates stale listings by setting `isActive: false` on jobs that have exceeded the configured maximum age, keeping the board free of outdated postings.
+  </Card>
+</CardGroup>
+
+Both schedulers are started by `server.js` at application boot. Job model write operations also trigger a Redis cache clear via post-save hooks, so cached search results are invalidated when the underlying data changes.
+
+<Note>
+  Adzuna credentials (`ADZUNA_APP_ID` and `ADZUNA_APP_KEY`) are optional. When they are not configured, `GET /api/jobs/search` is unavailable but the board still serves listings from the MongoDB-backed `GET /api/jobs` endpoint. AI recommendations via `GET /api/jobs/recommended` also continue to work as long as jobs are stored locally.
+</Note>

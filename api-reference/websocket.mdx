@@ -1,0 +1,231 @@
+---
+title: "Real-Time Interview Streaming via Socket.io"
+sidebarTitle: "WebSocket"
+description: "Stream AI interviewer responses token-by-token during live interview sessions using the Hiretrack Socket.io interface."
+---
+
+Hiretrack uses [Socket.io](https://socket.io) to stream AI interviewer responses token-by-token during live interview sessions. Rather than waiting for a complete AI response before rendering anything, the server emits each text fragment individually as it arrives from Groq — producing a natural, real-time conversational effect in the UI. The Socket.io server is attached to the **same HTTP server** as the REST API, so no separate port or host is required.
+
+---
+
+## Connection
+
+Connect to the same origin as the REST API. In local development the default address is `http://localhost:5000`.
+
+| Parameter | Value |
+|---|---|
+| **URL** | Same origin as the REST API (e.g., `http://localhost:5000`) |
+| **Transport** | WebSocket with HTTP long-polling fallback (Socket.io default) |
+| **CORS origin** | Controlled by the `CLIENT_URL` environment variable on the server |
+| **Credentials** | Required — set `withCredentials: true` |
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:5000', {
+  withCredentials: true
+});
+
+socket.on('connect', () => {
+  console.log('Connected:', socket.id);
+});
+```
+
+<Info>
+  The server's CORS policy allows only the origin specified in the `CLIENT_URL` environment variable (defaulting to `http://localhost:5173`). Connections from any other origin are rejected at the handshake level.
+</Info>
+
+---
+
+## Events — Client to Server
+
+### `live_answer`
+
+Sends the candidate's answer to a question. The server receives the payload, builds an interviewer prompt, calls Groq with **streaming enabled**, and begins emitting response tokens back to the same socket via `ai_chunk`.
+
+**Payload**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `questionText` | `string` | ✅ | The interview question that was posed to the candidate |
+| `answerText` | `string` | ✅ | The candidate's spoken or typed answer. Pass an empty string for silence — the server substitutes `(silence)` in the prompt |
+| `expectedKeywords` | `string[]` | ❌ | Keywords expected in a strong answer. Used to guide the AI's follow-up. Defaults to `None` if omitted |
+
+```javascript
+socket.emit('live_answer', {
+  questionText: 'Can you walk me through a time you resolved a conflict in a team?',
+  answerText: 'Sure — in my last role I noticed two engineers had different ideas about the architecture. I arranged a short meeting where both could present their approach and we voted as a team.',
+  expectedKeywords: ['conflict resolution', 'communication', 'collaboration', 'compromise'],
+});
+```
+
+<Note>
+  The server processes one `live_answer` event at a time per socket. Emitting a second event while a stream is in progress will start a second concurrent Groq call on that socket. Consider disabling the submit control in your UI until `ai_complete` is received.
+</Note>
+
+---
+
+## Events — Server to Client
+
+These three events are emitted by the server in response to a `live_answer` event. Register listeners for all three before emitting `live_answer`.
+
+### `ai_chunk`
+
+Fired once per token (text fragment) as it streams from Groq. Append each chunk to your response buffer and update the UI progressively.
+
+| | |
+|---|---|
+| **Payload** | `string` — a single text fragment from the streaming Groq response |
+| **Fired** | Repeatedly, once per token, until the stream ends |
+
+```javascript
+socket.on('ai_chunk', (chunk) => {
+  // `chunk` is a short string, e.g. "That" or " sounds" or " like"
+  console.log('Token received:', chunk);
+});
+```
+
+---
+
+### `ai_complete`
+
+Fired exactly once after the Groq stream has finished and all `ai_chunk` events have been emitted. Use this event to finalize the displayed response and re-enable your UI controls.
+
+| | |
+|---|---|
+| **Payload** | None |
+| **Fired** | Once, after the last `ai_chunk` for a given `live_answer` event |
+
+```javascript
+socket.on('ai_complete', () => {
+  console.log('AI finished speaking.');
+  // re-enable the answer submission control
+});
+```
+
+---
+
+### `ai_error`
+
+Fired if the Groq API call fails. No `ai_chunk` or `ai_complete` events will follow.
+
+| | |
+|---|---|
+| **Payload** | `string` — a human-readable error message (e.g., `"Failed to get AI response."`) |
+| **Fired** | Once, in place of the `ai_chunk` / `ai_complete` sequence, when an error occurs |
+
+```javascript
+socket.on('ai_error', (errorMsg) => {
+  console.error('AI error:', errorMsg);
+  // surface the error in the UI
+});
+```
+
+---
+
+## Full Integration Example
+
+The following example covers the complete client-side integration: connecting, registering all server-event listeners, accumulating streamed tokens, and submitting an answer.
+
+```javascript
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:5000', { withCredentials: true });
+
+let aiResponse = '';
+
+// Listen for streaming tokens
+socket.on('ai_chunk', (chunk) => {
+  aiResponse += chunk;
+  // Update UI progressively — e.g., set a React state variable
+});
+
+socket.on('ai_complete', () => {
+  console.log('Full AI response:', aiResponse);
+  aiResponse = ''; // reset for the next question
+});
+
+socket.on('ai_error', (errorMsg) => {
+  console.error('AI error:', errorMsg);
+});
+
+// Submit an answer during a live interview
+function submitAnswer(questionText, answerText, expectedKeywords) {
+  aiResponse = ''; // clear any previous response
+  socket.emit('live_answer', {
+    questionText,
+    answerText,
+    expectedKeywords,
+  });
+}
+```
+
+<Tip>
+  In a React application, store `aiResponse` in a `useRef` for accumulation and a `useState` value for rendering. Update the state inside `ai_chunk` to trigger a re-render on every token, then finalize presentation inside `ai_complete`.
+</Tip>
+
+---
+
+## AI Behavior
+
+When the server receives a `live_answer` event it builds a prompt from the question, the candidate's answer, and any expected keywords, then calls Groq with the following parameters.
+
+| Parameter | Value |
+|---|---|
+| **Model** | `llama-3.3-70b-versatile` |
+| **Temperature** | `0.5` |
+| **Max tokens** | `150` |
+| **Streaming** | `true` |
+
+The AI is instructed to act as a conversational interviewer: it provides a **1–3 sentence follow-up or acknowledgment** based *only* on the candidate's answer. It does not return JSON or structured data — only natural spoken language.
+
+### System prompt customization
+
+The interviewer's behavior is governed by a system prompt. The server first attempts to load a document from the `SystemPrompt` collection whose `category` is `"interview"`. If a custom prompt is found, it replaces the hardcoded default entirely.
+
+Admins can view and update this prompt via the Admin Dashboard at **Settings → Prompt Editor**, which calls:
+
+```
+PATCH /api/admin/prompts/:id
+```
+
+The `SystemPrompt` model supports full version history — every update is recorded with the previous content, a change reason, and the ID of the admin who made the change.
+
+<Note>
+  If no `interview` prompt document exists in the database, the server falls back to the hardcoded default: the AI is told to act as an interviewer and provide a brief, conversational 1–3 sentence follow-up or acknowledgment based only on the candidate's answer, without returning JSON.
+</Note>
+
+---
+
+## Security Considerations
+
+The Socket.io connection relies on CORS origin restrictions set by `CLIENT_URL` but does **not** independently authenticate the connecting client. A malicious actor on the allowed origin could open a socket and emit `live_answer` events without being logged in.
+
+<Warning>
+  In production, implement socket authentication by passing the user's JWT in the handshake `auth` object and verifying it inside a Socket.io `connection` middleware. Without this, any client that satisfies CORS can interact with the AI layer.
+</Warning>
+
+### Recommended approach
+
+**Client** — pass the access token in the handshake:
+
+```javascript
+// Client: pass token in handshake
+const socket = io('http://localhost:5000', {
+  withCredentials: true,
+  auth: { token: accessToken }
+});
+```
+
+**Server** — verify the token before allowing the connection:
+
+```javascript
+// Server: verify in socket middleware (recommended addition)
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  // verify JWT here — call next() if valid, next(new Error('Unauthorized')) if not
+  next();
+});
+```
+
+Rejecting the connection in middleware (`next(new Error(...))`) prevents the socket from reaching the `connection` handler entirely, which is the correct place to enforce authentication.

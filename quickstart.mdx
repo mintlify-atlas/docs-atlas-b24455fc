@@ -1,47 +1,181 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Hiretrack Running Locally in Minutes"
+sidebarTitle: "Quickstart"
+description: "Clone the repo, configure your API keys, and run both the Express backend and React frontend with a single command on your local machine."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+This guide walks you through cloning Hiretrack, installing dependencies for both the backend and frontend, wiring up every required environment variable, and starting the development servers. By the end you will have the backend API running on port 5000, the React frontend on port 5173, and an admin account ready to use.
 
 ## Prerequisites
 
-Before you begin, you must have:
+Make sure the following are available before you begin:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+- **Node.js 18+** — [nodejs.org](https://nodejs.org/)
+- **MongoDB Atlas** (cloud) or a local MongoDB instance — [mongodb.com/atlas](https://www.mongodb.com/atlas)
+- **Groq API key** — free at [console.groq.com](https://console.groq.com)
+- **OpenAI API key** — required for generating resume/JD embeddings — [platform.openai.com](https://platform.openai.com)
+- **Cloudinary account** — for PDF resume file storage — [cloudinary.com](https://cloudinary.com)
+- **Redis** — local Redis server or a managed instance such as [Upstash](https://upstash.com/) or Redis Cloud
+- **Adzuna API credentials** *(optional)* — enables the live job board search — [developer.adzuna.com](https://developer.adzuna.com/)
 
-## Get started
+## Installation
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Clone the repository">
+    Clone Hiretrack from GitHub and enter the project directory:
 
     ```bash
-    npm install your-package
+    git clone https://github.com/aftabalam999/AI-Interviewer.git
+    cd AI-Interviewer
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Install all dependencies">
+    From the **repository root**, run the convenience script that installs Node modules for both the backend and frontend in a single command:
 
     ```bash
-    your-cli init
+    npm run install:all
     ```
+
+    This is equivalent to running `npm install` inside `backend/` and then `npm install` inside `frontend/`. The root `package.json` uses [concurrently](https://www.npmjs.com/package/concurrently) to orchestrate both applications.
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Configure the backend environment">
+    Create your backend environment file by copying the provided example:
 
     ```bash
-    your-cli start
+    cp backend/.env.example backend/.env
     ```
+
+    Open `backend/.env` and fill in your values for every variable:
+
+    ```env backend/.env
+    # ── Server ──────────────────────────────────────────────────────────
+    PORT=5000
+    NODE_ENV=development
+
+    # ── MongoDB ─────────────────────────────────────────────────────────
+    # Use your Atlas connection string or a local URI
+    MONGO_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/ai_interview_db?retryWrites=true&w=majority
+
+    # ── JWT ─────────────────────────────────────────────────────────────
+    # Use at least 32 random characters for each secret
+    JWT_SECRET=your_super_secret_jwt_key_min_32_chars
+    JWT_EXPIRE=7d
+    JWT_REFRESH_SECRET=your_refresh_token_secret_min_32_chars
+    JWT_REFRESH_EXPIRE=30d
+
+    # ── Groq AI (free LLM) ──────────────────────────────────────────────
+    # Get your key at https://console.groq.com
+    GROQ_API_KEY=your_groq_api_key_here
+
+    # ── OpenAI (embeddings only) ─────────────────────────────────────────
+    # Required for the RAG pipeline (text-embedding-3-small)
+    OPENAI_API_KEY=your_actual_openai_api_key_here
+
+    # ── Cloudinary (resume file storage) ────────────────────────────────
+    CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
+    CLOUDINARY_API_KEY=your_cloudinary_api_key
+    CLOUDINARY_API_SECRET=your_cloudinary_api_secret
+
+    # ── CORS ─────────────────────────────────────────────────────────────
+    CLIENT_URL=http://localhost:5173
+
+    # ── Rate Limiting ────────────────────────────────────────────────────
+    RATE_LIMIT_WINDOW_MS=900000
+    RATE_LIMIT_MAX=100
+
+    # ── Redis ────────────────────────────────────────────────────────────
+    REDIS_ENABLED=true
+    REDIS_HOST=127.0.0.1
+    REDIS_PORT=6379
+
+    # ── Adzuna Job Search (optional) ─────────────────────────────────────
+    ADZUNA_APP_ID=your_app_id
+    ADZUNA_APP_KEY=your_app_key
+    ADZUNA_COUNTRY=in
+    ```
+
+    <Warning>
+      Never commit `backend/.env` or any file containing real API keys, secrets, or passwords to source control. The repository's `.gitignore` already excludes `.env` files — do not override that.
+    </Warning>
   </Step>
+
+  <Step title="Configure the frontend environment">
+    Create the frontend environment file:
+
+    ```bash
+    cp frontend/.env.example frontend/.env
+    ```
+
+    The only required variable for local development is the backend API URL:
+
+    ```env frontend/.env
+    VITE_API_URL=http://localhost:5000
+    ```
+
+    <Tip>
+      In development, Vite's built-in proxy (configured in `frontend/vite.config.js`) forwards all requests that begin with `/api` to `http://localhost:5000`. This means your frontend code can call `/api/auth/login` without hard-coding the backend host, and CORS is handled transparently.
+    </Tip>
+  </Step>
+
+  <Step title="Start the development servers">
+    **Option A — run both servers from the repository root (recommended):**
+
+    ```bash
+    npm run dev
+    ```
+
+    This uses `concurrently` to start the backend and frontend in parallel in the same terminal window.
+
+    ---
+
+    **Option B — run each server in a separate terminal:**
+
+    Terminal 1 (backend on port 5000):
+
+    ```bash
+    cd backend && npm run dev
+    ```
+
+    Terminal 2 (frontend on port 5173):
+
+    ```bash
+    cd frontend && npm run dev
+    ```
+
+    Open [http://localhost:5173](http://localhost:5173) in your browser once both servers report that they are ready.
+  </Step>
+
+  <Step title="Seed the admin account">
+    The admin panel requires a seeded admin user. Run the seed script from the `backend` directory:
+
+    ```bash
+    cd backend && node src/scripts/seedAdmin.js
+    ```
+
+    This creates the initial admin account in MongoDB. Review `backend/src/scripts/seedAdmin.js` before running it in any environment to understand the default credentials it sets, and change the password immediately after first login.
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Verifying the Setup
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+Once both servers are running, confirm the backend is healthy:
+
+```bash
+curl http://localhost:5000/api/health
+```
+
+You should receive:
+
+```json
+{
+  "success": true,
+  "message": "OK",
+  "timestamp": "2024-01-01T00:00:00.000Z"
+}
+```
+
+Navigate to [http://localhost:5173](http://localhost:5173) to register a candidate account, upload a resume, and start your first mock interview.

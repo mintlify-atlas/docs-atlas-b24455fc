@@ -1,0 +1,220 @@
+---
+title: "Environment Variables Reference for Hiretrack"
+sidebarTitle: "Env Variables"
+description: "Complete reference for every environment variable used by Hiretrack's backend and frontend — required credentials, defaults, and optional feature flags."
+---
+
+Hiretrack reads all external service credentials, feature flags, and runtime settings from environment variables. This keeps secrets out of your source code and makes configuration portable across development, staging, and production environments. Create `backend/.env` from `backend/.env.example` and `frontend/.env` from `frontend/.env.example` before starting either application, and **never commit real values** to version control.
+
+<Warning>
+  Add `backend/.env` and `frontend/.env` to your `.gitignore`. Committing real API keys, JWT secrets, or database credentials is a critical security risk that can lead to unauthorized access and data loss.
+</Warning>
+
+---
+
+## Backend Variables
+
+### Server
+
+<ParamField path="PORT" type="number" default="5000">
+  The TCP port the Express server listens on. Defaults to `5000` if not set.
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string" default="development">
+  Runtime environment. Accepted values are `development` and `production`. Affects error verbosity, logging, and optimisation flags.
+</ParamField>
+
+---
+
+### MongoDB
+
+<ParamField path="MONGO_URI" type="string" required>
+  Full MongoDB connection string. Use a MongoDB Atlas connection string (e.g. `mongodb+srv://...`) for hosted deployments or `mongodb://localhost:27017/ai_interviewer` for local development. The connection uses `bufferCommands: false`; if MongoDB is unavailable the server logs a warning and continues, but database-dependent routes will fail.
+</ParamField>
+
+---
+
+### JWT Authentication
+
+<ParamField path="JWT_SECRET" type="string" required>
+  Secret used to sign candidate access tokens. Must be **at least 32 characters** long. Use a cryptographically random value such as `openssl rand -base64 48`.
+</ParamField>
+
+<ParamField path="JWT_EXPIRE" type="string" default="7d">
+  Expiry duration for access tokens. Accepts any value accepted by the [`jsonwebtoken`](https://github.com/auth0/node-jsonwebtoken) `expiresIn` option — for example `7d`, `24h`, or `3600`.
+</ParamField>
+
+<ParamField path="JWT_REFRESH_SECRET" type="string" required>
+  Secret used to sign refresh tokens. Must be **at least 32 characters** long and **different** from `JWT_SECRET`.
+</ParamField>
+
+<ParamField path="JWT_REFRESH_EXPIRE" type="string" default="30d">
+  Expiry duration for refresh tokens. Defaults to `30d`.
+</ParamField>
+
+---
+
+### Groq AI
+
+<ParamField path="GROQ_API_KEY" type="string" required>
+  API key for the Groq inference service, which powers all LLM completions (question generation, answer evaluation, resume parsing, and live interview streaming). Obtain a free key at [console.groq.com](https://console.groq.com). The server logs a warning at startup if this value is missing.
+</ParamField>
+
+---
+
+### OpenAI Embeddings
+
+<ParamField path="OPENAI_API_KEY" type="string" required>
+  API key for OpenAI, used **exclusively** for generating text embeddings via the `text-embedding-3-small` model inside the RAG pipeline. This key is not used for chat completions. Required whenever an interview is generated with a resume attached. The RAG service throws an explicit error at runtime if this key is absent.
+</ParamField>
+
+---
+
+### Cloudinary File Storage
+
+<ParamField path="CLOUDINARY_CLOUD_NAME" type="string" required>
+  The cloud name shown in your Cloudinary dashboard. Used to construct upload and delivery URLs for resume files.
+</ParamField>
+
+<ParamField path="CLOUDINARY_API_KEY" type="string" required>
+  Cloudinary API key. Found in **Settings → Access Keys** in the Cloudinary console.
+</ParamField>
+
+<ParamField path="CLOUDINARY_API_SECRET" type="string" required>
+  Cloudinary API secret. Treat this like a password — never expose it client-side.
+</ParamField>
+
+---
+
+### CORS
+
+<ParamField path="CLIENT_URL" type="string" required>
+  The exact origin of the frontend application, e.g. `http://localhost:5173` in development. The Express CORS middleware and Socket.io use this value to restrict cross-origin requests. Must match the URL the browser uses to load the frontend — a mismatch will cause all API requests to be blocked.
+</ParamField>
+
+---
+
+### Rate Limiting
+
+<ParamField path="RATE_LIMIT_WINDOW_MS" type="number" default="900000">
+  The time window for rate limiting, in milliseconds. The default of `900000` equals 15 minutes. Applied to all `/api/` routes.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_MAX" type="number" default="100">
+  Maximum number of requests allowed per IP within the rate-limit window.
+</ParamField>
+
+---
+
+### Redis Caching
+
+<Note>
+  Redis is optional. When `REDIS_ENABLED` is `false` (or when the Redis connection cannot be established), caching silently degrades: job listings are fetched directly from the database on every request, and background cache invalidation is skipped. All other features continue to work normally.
+</Note>
+
+<ParamField path="REDIS_ENABLED" type="boolean" default="true">
+  Set to `false` to disable Redis entirely. When disabled, the Redis client is never instantiated and no connection attempts are made.
+</ParamField>
+
+<ParamField path="REDIS_HOST" type="string" default="127.0.0.1">
+  Hostname of the Redis server. Used when `REDIS_URL` is not set.
+</ParamField>
+
+<ParamField path="REDIS_PORT" type="number" default="6379">
+  Port of the Redis server. Used when `REDIS_URL` is not set.
+</ParamField>
+
+<ParamField path="REDIS_URL" type="string">
+  Full Redis connection URL (e.g. `redis://localhost:6379` or a hosted URL such as `rediss://...`). Takes precedence over `REDIS_HOST` and `REDIS_PORT` when set. Use this for Redis services that provide a single connection string (Upstash, Railway, Render, etc.).
+</ParamField>
+
+---
+
+### Adzuna Job Search
+
+<Note>
+  Adzuna credentials are optional. When they are absent, the live job-search endpoint (`/api/jobs/search`) and the scheduled job-synchronisation service will be unavailable, but the rest of the job board continues to serve listings from the local MongoDB (or PostgreSQL) database.
+</Note>
+
+<ParamField path="ADZUNA_APP_ID" type="string">
+  Your Adzuna application ID. Register at [developer.adzuna.com](https://developer.adzuna.com) to obtain credentials.
+</ParamField>
+
+<ParamField path="ADZUNA_APP_KEY" type="string">
+  Your Adzuna application key. Used together with `ADZUNA_APP_ID` to authenticate live search and synchronisation requests.
+</ParamField>
+
+<ParamField path="ADZUNA_COUNTRY" type="string">
+  Two-letter ISO 3166-1 country code targeting which Adzuna regional index to query (e.g. `in` for India, `gb` for the UK, `us` for the United States).
+</ParamField>
+
+---
+
+## Backend `.env` Example
+
+```ini filename="backend/.env"
+# =============================================
+# AI Interview App - Backend Environment Variables
+# =============================================
+
+# Server
+PORT=5000
+NODE_ENV=development
+
+# MongoDB
+MONGO_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/ai_interview_db?retryWrites=true&w=majority
+
+# JWT
+JWT_SECRET=your_super_secret_jwt_key_min_32_chars
+JWT_EXPIRE=7d
+JWT_REFRESH_SECRET=your_refresh_token_secret_min_32_chars
+JWT_REFRESH_EXPIRE=30d
+
+# Groq AI (Free LLM API - https://console.groq.com)
+GROQ_API_KEY=your_groq_api_key_here
+
+# Required for RAG (Converting Resumes & JDs to Vector Embeddings)
+OPENAI_API_KEY=your_actual_openai_api_key_here
+
+# Cloudinary (Resume/File Storage)
+CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
+CLOUDINARY_API_KEY=your_cloudinary_api_key
+CLOUDINARY_API_SECRET=your_cloudinary_api_secret
+
+# Frontend URL (CORS)
+CLIENT_URL=http://localhost:5173
+
+# Rate Limiting
+RATE_LIMIT_WINDOW_MS=900000
+RATE_LIMIT_MAX=100
+
+# Redis (optional)
+REDIS_ENABLED=true
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+# REDIS_URL=redis://localhost:6379
+
+# Adzuna Job Search (optional)
+# ADZUNA_APP_ID=your_adzuna_app_id
+# ADZUNA_APP_KEY=your_adzuna_app_key
+# ADZUNA_COUNTRY=in
+```
+
+---
+
+## Frontend Variables
+
+<ParamField path="VITE_API_URL" type="string" required>
+  Base URL for all API requests made by the React frontend. In development, set this to `/api` so that the Vite dev server proxy forwards requests to the backend on port 5000. In a standalone deployment without a proxy, use the full backend URL, e.g. `https://api.yourapp.com/api`.
+</ParamField>
+
+<ParamField path="VITE_APP_NAME" type="string" default="AI Interview Prep">
+  The application display name shown in the browser tab title and UI headings.
+</ParamField>
+
+## Frontend `.env` Example
+
+```ini filename="frontend/.env"
+VITE_API_URL=http://localhost:5000/api
+VITE_APP_NAME=AI Interview Prep
+```

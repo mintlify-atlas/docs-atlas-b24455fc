@@ -1,0 +1,195 @@
+---
+title: "Admin Dashboard Overview — Hiretrack"
+sidebarTitle: "Overview"
+description: "Full operational control over Hiretrack: users, interviews, sessions, resumes, jobs, AI prompts, subscription plans, payments, and system settings."
+---
+
+The Hiretrack admin dashboard gives authorised staff complete operational visibility and control over the platform. From a single API surface you can manage every candidate, inspect every mock interview session, tune the AI prompts that power Groq (Llama 3.3) responses, configure subscription plans and process refunds, control the Adzuna job scraper, and adjust global system settings — all without touching application source code.
+
+## Admin authentication
+
+Admin authentication is **completely separate** from the candidate authentication flow. Admin tokens are validated against the `admin` and `super_admin` roles independently; a candidate JWT is rejected outright at the admin login endpoint.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/admin/auth/login` | Authenticate with admin email and password — returns `accessToken` and `refreshToken` |
+| `POST` | `/api/admin/auth/logout` | Invalidate the admin session (client discards the token) |
+| `POST` | `/api/admin/auth/refresh` | Exchange a refresh token for a new access token |
+| `GET` | `/api/admin/auth/me` | Retrieve the current admin profile and permission list |
+
+### Seeding the first admin
+
+Before any admin can log in, the initial `super_admin` account must be created by running the seed script once against your MongoDB instance:
+
+```bash
+node backend/src/scripts/seedAdmin.js
+```
+
+The script connects to the URI in your `.env`, checks whether the admin account already exists, and either creates or resets it. On success it prints the login credentials to stdout.
+
+<Warning>
+`seedAdmin.js` contains a hardcoded password (`passwore123`) and a hardcoded email (`aftab@admin.com`). **Change both values before running the script in any production or staging environment.** Committing real credentials to source control is a security risk.
+</Warning>
+
+## Admin roles and permissions
+
+Hiretrack uses a role-based access control (RBAC) system defined in `middleware/rbac.js`. Two primary admin roles are relevant for day-to-day operations:
+
+| Role | Description |
+|------|-------------|
+| `admin` | Can view and manage users, jobs, templates, prompts, payments, scraper, logs, analytics, and settings |
+| `super_admin` | Wildcard (`*`) access — all `admin` permissions plus the ability to delete users and override any permission check |
+
+Two additional roles exist for more restricted staff access:
+
+| Role | Description |
+|------|-------------|
+| `content_manager` | Can manage jobs, templates, and control the scraper |
+| `support` | Can view and update users, issue payment refunds, and view logs |
+
+Fine-grained permission strings (e.g. `update:prompts`, `run:scraper`, `refund:payments`) are checked per-route via the `requirePermission()` middleware. `super_admin` bypasses all individual permission checks.
+
+## Dashboard sections
+
+<CardGroup cols={2}>
+  <Card
+    title="Users & Interviews"
+    icon="users"
+    href="/admin/users-and-interviews"
+  >
+    Manage candidates, view and delete interviews, sessions, resumes, job listings, and control the Adzuna scraper.
+  </Card>
+  <Card
+    title="Prompts & Templates"
+    icon="wand-magic-sparkles"
+    href="/admin/prompts-and-templates"
+  >
+    Customise the AI system prompts that power question generation, answer evaluation, and resume parsing — with full version history.
+  </Card>
+  <Card
+    title="System Settings"
+    icon="sliders"
+    href="/admin/system-settings"
+  >
+    Configure platform settings, subscription plans, payment transactions, refunds, and platform-wide analytics.
+  </Card>
+</CardGroup>
+
+## Platform statistics — `GET /api/admin/stats`
+
+The stats endpoint provides a real-time snapshot of the entire platform, aggregating data across candidates, interviews, sessions, resumes, jobs, revenue, and recent activity.
+
+```json
+{
+  "success": true,
+  "data": {
+    "totalUsers": 482,
+    "premiumUsers": 93,
+    "freeUsers": 389,
+    "activeUsers": 341,
+    "newUsersThisWeek": 27,
+    "totalInterviews": 1204,
+    "interviewsToday": 18,
+    "totalSessions": 3871,
+    "completedSessions": 2944,
+    "totalResumes": 619,
+    "jobsCount": 156,
+    "applicationsCount": 4490,
+    "totalRevenue": 8431.50,
+    "platformAvgScore": "74.2",
+    "activities": [
+      {
+        "id": "session-64a...",
+        "type": "session",
+        "title": "Interview Completed",
+        "message": "Jane Doe completed mock interview for Frontend Engineer",
+        "timestamp": "2025-01-15T10:22:00.000Z",
+        "score": 81
+      }
+    ],
+    "charts": {
+      "userGrowth": [{ "month": "Aug", "users": 310 }],
+      "revenue":    [{ "month": "Aug", "amount": 1200 }],
+      "interviews": [{ "month": "Aug", "count": 198 }],
+      "dailyActivity": [{ "day": "Mon", "sessions": 42, "users": 11 }]
+    },
+    "recentErrors": [
+      {
+        "id": "64b...",
+        "service": "AI - audio_conversion_failed",
+        "message": "Audio speech compilation failed. Invalid file encoding stream.",
+        "timestamp": "2025-01-15T09:11:00.000Z",
+        "severity": "failed"
+      }
+    ]
+  }
+}
+```
+
+Key fields returned by `GET /api/admin/stats`:
+
+| Field | Description |
+|-------|-------------|
+| `totalUsers` | Total candidate accounts (excludes admin users) |
+| `premiumUsers` / `freeUsers` | Premium vs free candidate split |
+| `totalInterviews` | All interview configs ever created |
+| `totalSessions` | All session runs (includes in-progress and completed) |
+| `totalResumes` | All uploaded resume files |
+| `jobsCount` | Active (non-archived) job listings |
+| `applicationsCount` | Combined resumes + sessions (proxy for application activity) |
+| `totalRevenue` | Sum of all `success`-status transactions |
+| `platformAvgScore` | Mean `overallScore` across all completed sessions |
+| `activities` | Up to 8 most recent platform events across registrations, sessions, and resumes |
+| `charts` | 6-month trend data for user growth, revenue, and interview counts, plus current-week daily activity |
+| `recentErrors` | Last 5 audit log entries with `failed` or `warning` status |
+
+## Audit logging
+
+Every significant admin action is captured in the `AuditLog` MongoDB collection. Log entries are categorised and carry a status so failures are immediately visible.
+
+```http
+GET /api/admin/logs?page=1&limit=12&category=auth&status=failed
+```
+
+**Query parameters**
+
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `page` | integer | Page number (default `1`) |
+| `limit` | integer | Results per page (default `12`) |
+| `category` | `auth` \| `admin` \| `ai` \| `payment` \| `scraper` \| `email` | Filter by log category |
+| `status` | `success` \| `failed` \| `warning` \| `info` | Filter by outcome |
+| `search` | string | Full-text search across `action` and `details` fields |
+
+**Example log entry**
+
+```json
+{
+  "_id": "64c...",
+  "category": "ai",
+  "action": "groq_completion_success",
+  "status": "success",
+  "userId": { "name": "Jane Doe", "email": "jane@example.com" },
+  "details": "Groq Llama-3.3 prompt execution processed for candidate Resume parser.",
+  "metadata": {
+    "model": "llama-3.3-70b-versatile",
+    "latencyMs": 840,
+    "promptTokens": 320,
+    "completionTokens": 120
+  },
+  "createdAt": "2025-01-15T10:00:00.000Z"
+}
+```
+
+## Analytics
+
+`GET /api/admin/analytics/stats` returns platform-wide usage data including user growth, session completion rates, subscription conversion, revenue trends, and job listing activity. It accepts a `range` query parameter:
+
+| Value | Description |
+|-------|-------------|
+| `7d` | Last 7 days |
+| `30d` | Last 30 days (default) |
+| `90d` | Last 90 days |
+| `1y` | Last 12 months |
+
+See [System Settings → Analytics](/admin/system-settings#analytics) for the full response shape.

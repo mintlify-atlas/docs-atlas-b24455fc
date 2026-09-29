@@ -1,0 +1,418 @@
+---
+title: "Interview Endpoints — Create, Generate Questions, Manage"
+sidebarTitle: "Interviews"
+description: "Configure mock interviews, trigger AI question generation via the RAG pipeline, and manage interview records for Hiretrack candidates."
+---
+
+The interview resource represents a configured mock interview — a combination of job details, experience level, and question preferences — along with the AI-generated questions that will be asked during a session. Creating an interview does not immediately generate questions; question generation is a separate, explicit step that triggers the RAG pipeline (resume chunking → embeddings → Groq completion). An interview moves through the following status lifecycle:
+
+| `status` | Description |
+|---|---|
+| `draft` | Newly created; questions have not been generated yet |
+| `ready` | Questions have been generated; the interview can be started |
+| `in_progress` | An active session is running against this interview |
+| `completed` | At least one session has been completed |
+
+A parallel `generationStatus` field tracks the AI pipeline specifically: `pending` → `generating` → `generated` (or `failed`).
+
+All interview endpoints require authentication.
+
+---
+
+## Interview Object
+
+<ResponseField name="_id" type="string">
+  MongoDB ObjectId.
+</ResponseField>
+
+<ResponseField name="userId" type="string">
+  ObjectId of the owning user.
+</ResponseField>
+
+<ResponseField name="jobTitle" type="string">
+  The target job title (e.g. `"Senior Backend Engineer"`).
+</ResponseField>
+
+<ResponseField name="jobDescription" type="string">
+  Full job description text (50–5 000 characters).
+</ResponseField>
+
+<ResponseField name="company" type="string | null">
+  Optional company name.
+</ResponseField>
+
+<ResponseField name="experienceLevel" type="string">
+  One of `entry`, `mid`, `senior`, `lead`, or `executive`.
+</ResponseField>
+
+<ResponseField name="questionTypes" type="array">
+  Array of question category strings requested. Each element is one of `technical`, `behavioral`, `situational`, `hr`, or `culture_fit`. Defaults to `["technical", "behavioral"]`.
+</ResponseField>
+
+<ResponseField name="numberOfQuestions" type="number">
+  Target number of questions to generate (3–20). Defaults to `10`.
+</ResponseField>
+
+<ResponseField name="questions" type="array">
+  Array of question subdocuments (populated after generation). Each contains:
+  - `_id` — subdocument ObjectId
+  - `questionText` — the question string
+  - `category` — `technical`, `behavioral`, `situational`, `hr`, or `culture_fit`
+  - `difficulty` — `easy`, `medium`, or `hard`
+  - `expectedKeywords` — array of keyword strings the AI considers strong indicators of a good answer
+  - `order` — display order index
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Interview lifecycle state: `draft`, `ready`, `in_progress`, or `completed`.
+</ResponseField>
+
+<ResponseField name="generationStatus" type="string">
+  AI pipeline state: `pending`, `generating`, `generated`, or `failed`.
+</ResponseField>
+
+<ResponseField name="generationError" type="string | null">
+  Error message if `generationStatus` is `failed`; `null` otherwise.
+</ResponseField>
+
+<ResponseField name="resumeId" type="string | object | null">
+  ObjectId of the linked resume (if any). Populated as `{ originalName, fileUrl }` in single-interview responses.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+---
+
+## Create Interview
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/interviews`
+
+🔒 **Requires authentication.**
+
+Creates an interview record in `draft` status. Questions are **not** generated at this point. Call `POST /api/interviews/:id/generate` after creation to trigger the AI pipeline.
+
+**Request body**
+
+<ParamField body="jobTitle" type="string" required>
+  The job title to practise for. Cannot be empty.
+</ParamField>
+
+<ParamField body="jobDescription" type="string" required>
+  Full job description. Minimum 50 characters; maximum 5 000 characters.
+</ParamField>
+
+<ParamField body="company" type="string">
+  Optional company name for context.
+</ParamField>
+
+<ParamField body="experienceLevel" type="string">
+  One of `entry`, `mid`, `senior`, `lead`, or `executive`. Defaults to `mid`.
+</ParamField>
+
+<ParamField body="questionTypes" type="array">
+  Array of question category strings. Valid values: `technical`, `behavioral`, `situational`, `hr`, `culture_fit`. Defaults to `["technical", "behavioral"]`.
+</ParamField>
+
+<ParamField body="numberOfQuestions" type="number">
+  Number of questions to generate. Integer between 3 and 20. Defaults to `10`.
+</ParamField>
+
+<ParamField body="resumeId" type="string">
+  Optional MongoDB ObjectId of a previously uploaded resume. When provided, the generate step retrieves the resume's extracted text and uses it as RAG context to tailor questions to the candidate's background.
+</ParamField>
+
+**Response `201 Created`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="interview" type="object">
+  The newly created interview object with `status: "draft"` and `generationStatus: "pending"`.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/interviews \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jobTitle": "Senior Backend Engineer",
+    "jobDescription": "We are looking for an experienced backend engineer to design and build scalable Node.js microservices, work with PostgreSQL and Redis, and mentor junior developers in a fast-paced startup environment.",
+    "company": "TechCorp",
+    "experienceLevel": "senior",
+    "questionTypes": ["technical", "behavioral"],
+    "numberOfQuestions": 8,
+    "resumeId": "665b2a..."
+  }'
+```
+
+```json
+{
+  "success": true,
+  "interview": {
+    "_id": "666c3d...",
+    "userId": "664a1f...",
+    "jobTitle": "Senior Backend Engineer",
+    "jobDescription": "We are looking for an experienced backend engineer...",
+    "company": "TechCorp",
+    "experienceLevel": "senior",
+    "questionTypes": ["technical", "behavioral"],
+    "numberOfQuestions": 8,
+    "resumeId": "665b2a...",
+    "questions": [],
+    "status": "draft",
+    "generationStatus": "pending",
+    "generationError": null,
+    "createdAt": "2024-11-01T12:00:00.000Z",
+    "updatedAt": "2024-11-01T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## List Interviews
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/interviews`
+
+🔒 **Requires authentication.**
+
+Returns a paginated list of the authenticated user's interviews, sorted newest-first. The `questions` array is excluded from list responses to keep payloads small; retrieve a single interview to access questions.
+
+**Query parameters**
+
+<ParamField query="page" type="integer">
+  Page number, 1-based. Defaults to `1`.
+</ParamField>
+
+<ParamField query="limit" type="integer">
+  Items per page. Defaults to `10`.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="count" type="number">
+  Number of interviews in this page.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total number of interviews across all pages.
+</ResponseField>
+
+<ResponseField name="page" type="number">
+  Current page number.
+</ResponseField>
+
+<ResponseField name="totalPages" type="number">
+  Total number of pages.
+</ResponseField>
+
+<ResponseField name="interviews" type="array">
+  Array of interview objects (without `questions`).
+</ResponseField>
+
+```bash
+curl -X GET "http://localhost:5000/api/interviews?page=1&limit=5" \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "count": 5,
+  "total": 12,
+  "page": 1,
+  "totalPages": 3,
+  "interviews": [
+    {
+      "_id": "666c3d...",
+      "jobTitle": "Senior Backend Engineer",
+      "company": "TechCorp",
+      "experienceLevel": "senior",
+      "numberOfQuestions": 8,
+      "status": "ready",
+      "generationStatus": "generated",
+      "createdAt": "2024-11-01T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## Get Interview
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/interviews/:id`
+
+🔒 **Requires authentication.**
+
+Returns a single interview including its full `questions` array. The `resumeId` field is populated with `{ originalName, fileUrl }` when a resume is linked.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the interview.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="interview" type="object">
+  Full interview object including the `questions` array.
+</ResponseField>
+
+```bash
+curl -X GET http://localhost:5000/api/interviews/666c3d... \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "interview": {
+    "_id": "666c3d...",
+    "jobTitle": "Senior Backend Engineer",
+    "experienceLevel": "senior",
+    "status": "ready",
+    "generationStatus": "generated",
+    "resumeId": {
+      "_id": "665b2a...",
+      "originalName": "ada_lovelace_cv.pdf",
+      "fileUrl": "https://res.cloudinary.com/..."
+    },
+    "questions": [
+      {
+        "_id": "667d4e...",
+        "questionText": "Describe a time you optimized a slow database query in a production environment.",
+        "category": "technical",
+        "difficulty": "hard",
+        "expectedKeywords": ["index", "query plan", "EXPLAIN", "N+1", "caching"],
+        "order": 1
+      }
+    ],
+    "createdAt": "2024-11-01T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Generate Questions
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/interviews/:id/generate`
+
+🔒 **Requires authentication.**
+
+Triggers the AI question-generation pipeline for an existing interview. If a `resumeId` is linked, the resume's extracted text is fetched and fed into the RAG context window. Returns `400` if generation is already in progress.
+
+The pipeline sets `generationStatus` to `generating` immediately, then calls Groq to produce structured questions. On success it transitions the interview to `status: "ready"` and `generationStatus: "generated"`. On failure `generationStatus` is set to `"failed"` and `generationError` is populated.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the interview.
+</ParamField>
+
+**Request body**
+
+None required.
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Confirmation message including the count of questions generated, e.g. `"8 questions generated successfully."`.
+</ResponseField>
+
+<ResponseField name="interview" type="object">
+  Updated interview object with `status: "ready"`, `generationStatus: "generated"`, and the populated `questions` array.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/interviews/666c3d.../generate \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "message": "8 questions generated successfully.",
+  "interview": {
+    "_id": "666c3d...",
+    "status": "ready",
+    "generationStatus": "generated",
+    "questions": [
+      {
+        "_id": "667d4e...",
+        "questionText": "How do you approach designing a RESTful API for a high-traffic service?",
+        "category": "technical",
+        "difficulty": "hard",
+        "expectedKeywords": ["idempotency", "versioning", "rate limiting", "pagination", "caching"],
+        "order": 1
+      },
+      {
+        "_id": "667d4f...",
+        "questionText": "Tell me about a time you resolved a conflict within your engineering team.",
+        "category": "behavioral",
+        "difficulty": "medium",
+        "expectedKeywords": ["communication", "empathy", "compromise", "outcome"],
+        "order": 2
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Delete Interview
+
+<span style={{background:"#dc2626",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>DELETE</span> `/api/interviews/:id`
+
+🔒 **Requires authentication.**
+
+Permanently deletes an interview and its generated questions. Does not delete associated sessions. Returns `404` if the interview does not exist or belongs to a different user.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the interview.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Interview deleted."`
+</ResponseField>
+
+```bash
+curl -X DELETE http://localhost:5000/api/interviews/666c3d... \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "message": "Interview deleted."
+}
+```

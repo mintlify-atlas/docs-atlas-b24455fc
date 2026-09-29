@@ -1,0 +1,225 @@
+---
+title: "Interview Setup and Question Generation in Hiretrack"
+sidebarTitle: "Interview Setup"
+description: "Configure a mock interview with a job role and description. Hiretrack uses RAG and Groq to generate grounded technical and behavioral questions tailored to your resume."
+---
+
+Before starting a live session, you configure an interview by providing a job title, a job description, your experience level, and optionally a resume. Hiretrack stores this configuration and, when you trigger generation, runs a full RAG pipeline: the job description and resume are chunked, embedded with OpenAI, retrieved via cosine similarity, and passed to Groq's `llama-3.3-70b-versatile` model which generates structured questions grounded strictly in the retrieved context.
+
+## Required and optional fields
+
+<ParamField body="jobTitle" type="string" required>
+  The role you are interviewing for (e.g. `"Senior Backend Engineer"`). Used as context throughout question generation and evaluation.
+</ParamField>
+
+<ParamField body="jobDescription" type="string" required>
+  Full description of the role and its requirements. Must be at least **50 characters**. Maximum is 5 000 characters. The more specific the description, the more targeted the generated questions will be.
+</ParamField>
+
+<ParamField body="experienceLevel" type="string">
+  Candidate seniority. Accepted values: `entry`, `mid`, `senior`, `lead`, `executive`. Defaults to `mid`. Controls question difficulty and depth.
+</ParamField>
+
+<ParamField body="numberOfQuestions" type="number">
+  Total questions to generate. Must be between **3 and 20**, inclusive. Defaults to `10`.
+</ParamField>
+
+<ParamField body="company" type="string">
+  Optional company name for reference in reports and session history.
+</ParamField>
+
+<ParamField body="resumeId" type="string">
+  MongoDB ObjectId of a previously uploaded resume. When provided, the resume text is chunked alongside the job description and embedded together, allowing questions to reference your specific skills and projects.
+</ParamField>
+
+## Create interview
+
+```http
+POST /api/interviews
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "jobTitle": "Senior Backend Engineer",
+  "jobDescription": "We are looking for a Senior Backend Engineer to build and scale distributed systems. You will work with Node.js, MongoDB, Redis, and AWS. Responsibilities include designing REST APIs, optimizing database queries, implementing caching strategies, and contributing to system architecture decisions.",
+  "experienceLevel": "senior",
+  "numberOfQuestions": 12,
+  "company": "Acme Corp",
+  "resumeId": "64f1a2b3c4d5e6f7a8b9c0d1"
+}
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "interview": {
+    "_id": "64f2b3c4d5e6f7a8b9c0d2e3",
+    "userId": "64f1a2b3c4d5e6f7a8b9c000",
+    "jobTitle": "Senior Backend Engineer",
+    "jobDescription": "We are looking for...",
+    "experienceLevel": "senior",
+    "numberOfQuestions": 12,
+    "company": "Acme Corp",
+    "resumeId": "64f1a2b3c4d5e6f7a8b9c0d1",
+    "status": "draft",
+    "generationStatus": "pending",
+    "questions": [],
+    "createdAt": "2024-09-01T10:05:00.000Z"
+  }
+}
+```
+
+The interview is created with `status: "draft"` and `generationStatus: "pending"`. Questions are not generated yet — call the generate endpoint next.
+
+## Generate questions
+
+```http
+POST /api/interviews/:id/generate
+Authorization: Bearer <token>
+```
+
+Triggers the full RAG + Groq pipeline for the interview. The server sets `generationStatus` to `"generating"`, runs the pipeline, and on success updates the interview to `status: "ready"` and `generationStatus: "generated"`. If generation fails, `generationStatus` is set to `"failed"` and the error message is recorded in `generationError`.
+
+### RAG question generation pipeline
+
+<Steps>
+  <Step title="Fetch resume text">
+    If a `resumeId` is linked, the resume's `extractedText` is loaded from MongoDB.
+  </Step>
+  <Step title="Semantic chunking">
+    Both the job description and resume text are passed to `chunking.service.js`. The job description is chunked as `type: "job_description"` and the resume as `type: "resume"`. JD chunks are placed first in the combined array for query relevance.
+  </Step>
+  <Step title="OpenAI embedding">
+    The chunk array is sent to OpenAI's `text-embedding-3-small` model via LangChain. Each chunk is embedded and stored in an in-memory vector store alongside its metadata.
+  </Step>
+  <Step title="Dual-query retrieval">
+    Two fixed retrieval goals are run: one focused on extracting technical skills and frameworks from candidate projects, the other on identifying role responsibilities and qualifications. Each goal is first passed through a query optimizer, then embedded and matched against the vector store using cosine similarity.
+  </Step>
+  <Step title="Section-boosted ranking">
+    Raw cosine similarity scores are multiplied by section boost weights before ranking. `skills` chunks receive a 1.25× boost, `experience` and `responsibility` chunks 1.20×, `requirements` 1.15×, and `project` 1.10×. The top 6 chunks are selected and formatted with section labels.
+  </Step>
+  <Step title="Groq question generation">
+    The formatted context, job title, and experience level are passed to `llama-3.3-70b-versatile` with `temperature: 0.7`. The model is instructed to generate questions **only** from the retrieved chunks — no hallucinations about technologies or skills not present in the context.
+  </Step>
+</Steps>
+
+## Question distribution
+
+Questions are split into approximately two-thirds technical and one-third behavioral, with a minimum of one question in each category:
+
+```js
+const technicalCount = Math.max(1, Math.round((numberOfQuestions * 2) / 3));
+const behavioralCount = Math.max(1, numberOfQuestions - technicalCount);
+```
+
+For 12 questions: 8 technical + 4 behavioral. For 10 questions: 7 technical + 3 behavioral.
+
+## Question object shape
+
+Each question in the `questions` array follows this structure:
+
+```json
+{
+  "questionText": "You've worked with Redis in your current role. Describe how you implemented a caching strategy to reduce database load, and explain any trade-offs you encountered.",
+  "category": "technical",
+  "difficulty": "hard",
+  "expectedKeywords": ["cache invalidation", "TTL", "Redis", "eviction policy", "consistency"],
+  "order": 1
+}
+```
+
+<ResponseField name="questionText" type="string">
+  The full interview question as presented to the candidate.
+</ResponseField>
+<ResponseField name="category" type="string">
+  `technical` or `behavioral`. Technical questions test real-world problem solving; behavioral questions use the STAR method format.
+</ResponseField>
+<ResponseField name="difficulty" type="string">
+  `easy`, `medium`, or `hard`. Calibrated to the requested `experienceLevel`.
+</ResponseField>
+<ResponseField name="expectedKeywords" type="string[]">
+  3–5 keywords or concepts that a strong answer should include. Used during evaluation to compute `aiScore`.
+</ResponseField>
+<ResponseField name="order" type="number">
+  1-based display order for the session UI.
+</ResponseField>
+
+<Tip>
+  Longer, more specific job descriptions produce better-grounded questions. A one-sentence description gives the RAG pipeline very little to retrieve; a full job posting with a responsibilities section, required skills, and preferred qualifications will produce questions that map precisely to the role. Aim for at least 200 characters in the `jobDescription` field.
+</Tip>
+
+## List interviews
+
+```http
+GET /api/interviews
+Authorization: Bearer <token>
+```
+
+Returns a paginated list of all interviews for the authenticated user, sorted newest first. The `questions` array is excluded from list responses for performance — use the single-interview endpoint to fetch questions.
+
+| Query param | Default | Description |
+|-------------|---------|-------------|
+| `page` | `1` | Page number |
+| `limit` | `10` | Results per page |
+
+```json
+{
+  "success": true,
+  "count": 3,
+  "total": 3,
+  "page": 1,
+  "totalPages": 1,
+  "interviews": [
+    {
+      "_id": "64f2b3c4d5e6f7a8b9c0d2e3",
+      "jobTitle": "Senior Backend Engineer",
+      "company": "Acme Corp",
+      "experienceLevel": "senior",
+      "numberOfQuestions": 12,
+      "status": "ready",
+      "generationStatus": "generated",
+      "createdAt": "2024-09-01T10:05:00.000Z"
+    }
+  ]
+}
+```
+
+## Get interview by ID
+
+```http
+GET /api/interviews/:id
+Authorization: Bearer <token>
+```
+
+Returns the full interview document including all generated questions, populated with the linked resume's `originalName` and `fileUrl`.
+
+```json
+{
+  "success": true,
+  "interview": {
+    "_id": "64f2b3c4d5e6f7a8b9c0d2e3",
+    "jobTitle": "Senior Backend Engineer",
+    "status": "ready",
+    "generationStatus": "generated",
+    "questions": [
+      {
+        "_id": "64f3c4d5e6f7a8b9c0d3e4f5",
+        "questionText": "...",
+        "category": "technical",
+        "difficulty": "hard",
+        "expectedKeywords": ["..."],
+        "order": 1
+      }
+    ],
+    "resumeId": {
+      "_id": "64f1a2b3c4d5e6f7a8b9c0d1",
+      "originalName": "your-resume.pdf",
+      "fileUrl": "https://res.cloudinary.com/..."
+    }
+  }
+}
+```

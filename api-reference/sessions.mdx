@@ -1,0 +1,449 @@
+---
+title: "Session Endpoints — Start, Answer, Complete Interviews"
+sidebarTitle: "Sessions"
+description: "Start a Hiretrack mock interview session, submit answers question by question, complete the session, and retrieve AI scores and a full performance report."
+---
+
+A session represents a single run-through of a configured interview. The lifecycle is:
+
+1. **Start** — `POST /api/sessions/start` creates a session record and returns the interview with all questions. The interview must be in `ready` status (questions generated).
+2. **Answer** — `POST /api/sessions/:id/answer` stores each candidate answer. Answers can be submitted in any order and updated by re-submitting the same `questionId`. The session transitions to `in_progress` after the first answer.
+3. **Complete** — `POST /api/sessions/:id/complete` evaluates every answer with Groq, computes per-answer `aiScore` and `aiFeedback`, generates an overall report (overall score, strengths, weaknesses, improvement tips), and marks the session `completed`.
+
+If the user starts a session on an interview that already has an active session in `started` or `in_progress` state, the existing session is returned with `resumed: true` rather than creating a duplicate.
+
+All session endpoints require authentication.
+
+---
+
+## Session Object
+
+<ResponseField name="_id" type="string">
+  MongoDB ObjectId of the session.
+</ResponseField>
+
+<ResponseField name="userId" type="string">
+  ObjectId of the owning user.
+</ResponseField>
+
+<ResponseField name="interviewId" type="string | object">
+  ObjectId of the interview. Populated with `{ jobTitle, company, experienceLevel }` in list responses and with `{ jobTitle, company, experienceLevel, questions }` in single-session responses.
+</ResponseField>
+
+<ResponseField name="answers" type="array">
+  Array of answer subdocuments. Excluded from list responses. Each contains:
+  - `questionId` — ObjectId of the question subdocument
+  - `questionText` — copy of the question text at time of answer
+  - `answerText` — the candidate's written answer
+  - `timeTaken` — time spent on this question in seconds
+  - `skipped` — `true` if the candidate skipped the question
+  - `aiScore` — integer 0–10 assigned by the AI evaluator; `null` until `complete` is called
+  - `aiFeedback` — written feedback from the AI; `null` until `complete` is called
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Session lifecycle state: `started`, `in_progress`, `completed`, or `abandoned`.
+</ResponseField>
+
+<ResponseField name="overallScore" type="number | null">
+  Final score on a 0–100 scale. Calculated as `(sumOfAiScores / (answeredCount × 10)) × 100`. Populated after `complete`.
+</ResponseField>
+
+<ResponseField name="overallFeedback" type="string | null">
+  Combined improvement tips as a single string. Populated after `complete`.
+</ResponseField>
+
+<ResponseField name="strengths" type="array">
+  Array of strength strings identified by the AI. Populated after `complete`.
+</ResponseField>
+
+<ResponseField name="areasForImprovement" type="array">
+  Array of area-for-improvement strings identified by the AI. Populated after `complete`.
+</ResponseField>
+
+<ResponseField name="recommendedResources" type="array">
+  Array of improvement tip strings from the AI. Populated after `complete`.
+</ResponseField>
+
+<ResponseField name="totalTimeTaken" type="number">
+  Sum of all `timeTaken` values across answers, in seconds.
+</ResponseField>
+
+<ResponseField name="startedAt" type="string">
+  ISO 8601 timestamp when the session was started.
+</ResponseField>
+
+<ResponseField name="completedAt" type="string | null">
+  ISO 8601 timestamp when `complete` was called. `null` until then.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+---
+
+## Start Session
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/sessions/start`
+
+🔒 **Requires authentication.**
+
+Creates a new session for the given interview and returns both the session record and the full interview (including questions). Returns `400` if the interview has no generated questions. Returns the existing active session (with `resumed: true`) if one already exists.
+
+**Request body**
+
+<ParamField body="interviewId" type="string" required>
+  MongoDB ObjectId of the interview to start. The interview must belong to the authenticated user and have generated questions.
+</ParamField>
+
+**Response `201 Created`** (new session) or **`200 OK`** (resumed session)
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="session" type="object">
+  The session object with `status: "started"` and an empty `answers` array.
+</ResponseField>
+
+<ResponseField name="interview" type="object">
+  The full interview object including the `questions` array. Use this to display questions to the candidate.
+</ResponseField>
+
+<ResponseField name="resumed" type="boolean">
+  `true` when an existing active session was returned rather than a new one created.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/sessions/start \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{ "interviewId": "666c3d..." }'
+```
+
+```json
+{
+  "success": true,
+  "session": {
+    "_id": "668e5f...",
+    "userId": "664a1f...",
+    "interviewId": "666c3d...",
+    "answers": [],
+    "status": "started",
+    "overallScore": null,
+    "startedAt": "2024-11-01T14:00:00.000Z",
+    "createdAt": "2024-11-01T14:00:00.000Z"
+  },
+  "interview": {
+    "_id": "666c3d...",
+    "jobTitle": "Senior Backend Engineer",
+    "questions": [
+      {
+        "_id": "667d4e...",
+        "questionText": "How do you approach designing a RESTful API for a high-traffic service?",
+        "category": "technical",
+        "difficulty": "hard",
+        "order": 1
+      }
+    ]
+  }
+}
+```
+
+---
+
+## List Sessions
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/sessions`
+
+🔒 **Requires authentication.**
+
+Returns a paginated list of all the authenticated user's sessions, sorted newest-first. The `answers` array is excluded from list responses. The `interviewId` field is populated with `{ jobTitle, company, experienceLevel }`.
+
+**Query parameters**
+
+<ParamField query="page" type="integer">
+  Page number, 1-based. Defaults to `1`.
+</ParamField>
+
+<ParamField query="limit" type="integer">
+  Items per page. Defaults to `10`.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="count" type="number">
+  Sessions in this page.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total sessions across all pages.
+</ResponseField>
+
+<ResponseField name="page" type="number">
+  Current page.
+</ResponseField>
+
+<ResponseField name="totalPages" type="number">
+  Total pages.
+</ResponseField>
+
+<ResponseField name="sessions" type="array">
+  Array of session objects (without `answers`).
+</ResponseField>
+
+```bash
+curl -X GET "http://localhost:5000/api/sessions?page=1&limit=10" \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "count": 3,
+  "total": 3,
+  "page": 1,
+  "totalPages": 1,
+  "sessions": [
+    {
+      "_id": "668e5f...",
+      "interviewId": {
+        "_id": "666c3d...",
+        "jobTitle": "Senior Backend Engineer",
+        "company": "TechCorp",
+        "experienceLevel": "senior"
+      },
+      "status": "completed",
+      "overallScore": 78,
+      "completedAt": "2024-11-01T15:30:00.000Z"
+    }
+  ]
+}
+```
+
+---
+
+## Get Session
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/sessions/:id`
+
+🔒 **Requires authentication.**
+
+Returns the full session including all answers with AI scores and feedback. The `interviewId` is populated with `{ jobTitle, company, experienceLevel, questions }`.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the session.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="session" type="object">
+  Full session object including `answers`, `strengths`, `areasForImprovement`, `recommendedResources`, and all scores.
+</ResponseField>
+
+```bash
+curl -X GET http://localhost:5000/api/sessions/668e5f... \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "session": {
+    "_id": "668e5f...",
+    "interviewId": {
+      "_id": "666c3d...",
+      "jobTitle": "Senior Backend Engineer",
+      "company": "TechCorp",
+      "experienceLevel": "senior"
+    },
+    "status": "completed",
+    "overallScore": 78,
+    "strengths": ["Strong systems design knowledge", "Clear communication style"],
+    "areasForImprovement": ["Needs more depth on database indexing strategies"],
+    "recommendedResources": ["Study B-tree vs hash indexes", "Practice EXPLAIN ANALYZE on PostgreSQL"],
+    "answers": [
+      {
+        "questionId": "667d4e...",
+        "questionText": "How do you approach designing a RESTful API for a high-traffic service?",
+        "answerText": "I start by identifying the resources and their relationships, then define clear contracts...",
+        "timeTaken": 120,
+        "skipped": false,
+        "aiScore": 8,
+        "aiFeedback": "Excellent answer covering versioning and pagination. Could have mentioned rate limiting strategies more explicitly."
+      }
+    ],
+    "totalTimeTaken": 540,
+    "startedAt": "2024-11-01T14:00:00.000Z",
+    "completedAt": "2024-11-01T14:09:00.000Z"
+  }
+}
+```
+
+---
+
+## Submit Answer
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/sessions/:id/answer`
+
+🔒 **Requires authentication.**
+
+Saves or updates a candidate's answer for a specific question. The session must be in `started` or `in_progress` state. If the same `questionId` is submitted twice, the previous answer is overwritten. AI scoring happens during `complete`, not here — this endpoint only persists the answer text.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the active session.
+</ParamField>
+
+**Request body**
+
+<ParamField body="questionId" type="string" required>
+  The `_id` of the question subdocument within the interview's `questions` array.
+</ParamField>
+
+<ParamField body="answerText" type="string" required>
+  The candidate's answer text.
+</ParamField>
+
+<ParamField body="timeTaken" type="number">
+  Time spent on this question in seconds. Defaults to `0`.
+</ParamField>
+
+<ParamField body="skipped" type="boolean">
+  Set to `true` if the candidate chose to skip the question. Defaults to `false`. Skipped questions receive `aiScore: 0` and `aiFeedback: "Question was skipped."` during completion.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Answer saved."`
+</ResponseField>
+
+<ResponseField name="session" type="object">
+  Updated session object including the current `answers` array.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/sessions/668e5f.../answer \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "questionId": "667d4e...",
+    "answerText": "I start by identifying the resources and their relationships, then define clear contracts using OpenAPI. For high-traffic services I think about caching strategies early, use pagination on all list endpoints, and version the API from day one to avoid breaking changes.",
+    "timeTaken": 120,
+    "skipped": false
+  }'
+```
+
+```json
+{
+  "success": true,
+  "message": "Answer saved.",
+  "session": {
+    "_id": "668e5f...",
+    "status": "in_progress",
+    "answers": [
+      {
+        "questionId": "667d4e...",
+        "questionText": "How do you approach designing a RESTful API for a high-traffic service?",
+        "answerText": "I start by identifying the resources and their relationships...",
+        "timeTaken": 120,
+        "skipped": false,
+        "aiScore": null,
+        "aiFeedback": null
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Complete Session
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/sessions/:id/complete`
+
+🔒 **Requires authentication.**
+
+Finalizes the session. Hiretrack evaluates every stored answer in parallel using Groq — assigning an `aiScore` (0–10) and `aiFeedback` to each — then calls Groq again to generate an overall performance report (`overallScore`, `strengths`, `areasForImprovement`, `recommendedResources`). The session status is set to `completed`, the interview status is updated to `completed`, and the user's `totalSessions` counter is incremented.
+
+The session must be in `started` or `in_progress` state. Returns `404` if no active session is found.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  MongoDB ObjectId of the active session.
+</ParamField>
+
+**Request body**
+
+None required.
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="session" type="object">
+  Completed session object with all `answers` populated with `aiScore` and `aiFeedback`, plus `overallScore`, `strengths`, `areasForImprovement`, `recommendedResources`, and `completedAt`.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/sessions/668e5f.../complete \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "session": {
+    "_id": "668e5f...",
+    "status": "completed",
+    "overallScore": 78,
+    "overallFeedback": "Study B-tree vs hash indexes. Practice EXPLAIN ANALYZE on PostgreSQL.",
+    "strengths": [
+      "Strong systems design knowledge",
+      "Clear and structured communication"
+    ],
+    "areasForImprovement": [
+      "Needs more depth on database indexing strategies",
+      "Could articulate trade-offs between SQL and NoSQL more clearly"
+    ],
+    "recommendedResources": [
+      "Study B-tree vs hash indexes",
+      "Practice EXPLAIN ANALYZE on PostgreSQL",
+      "Read 'Designing Data-Intensive Applications' by Kleppmann"
+    ],
+    "answers": [
+      {
+        "questionId": "667d4e...",
+        "questionText": "How do you approach designing a RESTful API for a high-traffic service?",
+        "answerText": "I start by identifying the resources and their relationships...",
+        "timeTaken": 120,
+        "skipped": false,
+        "aiScore": 8,
+        "aiFeedback": "Excellent answer covering versioning and pagination. Could have mentioned rate limiting strategies more explicitly."
+      }
+    ],
+    "totalTimeTaken": 540,
+    "completedAt": "2024-11-01T14:09:00.000Z"
+  }
+}
+```

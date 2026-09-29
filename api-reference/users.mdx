@@ -1,0 +1,261 @@
+---
+title: "User Endpoints — Profile, Dashboard, and Account"
+sidebarTitle: "Users"
+description: "Manage Hiretrack user profiles, update account details, change passwords, and retrieve dashboard statistics including session counts and average interview scores."
+---
+
+The users API provides profile management and account operations for the authenticated candidate. All four endpoints are grouped under `/api/users` and every one requires a valid Bearer token. Use these endpoints to display and update the user's public profile, enforce password changes, and power the candidate dashboard with session statistics.
+
+<Note>
+  All endpoints under `/api/users` require `Authorization: Bearer <accessToken>`. Requests without a valid token receive `401 Unauthorized`.
+</Note>
+
+---
+
+## Get Profile
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/users/profile`
+
+🔒 **Requires authentication.**
+
+Returns the full profile of the authenticated user, including a lightweight list of their uploaded resumes.
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The user document for the caller. Fields include:
+  - `_id` — MongoDB ObjectId
+  - `name` — display name
+  - `email` — email address (lowercase)
+  - `role` — one of `candidate`, `support`, `content_manager`, `admin`, `super_admin`
+  - `avatar` — URL string or `null`
+  - `credits` — remaining AI credits
+  - `isPremium` — `true` if the account has a premium plan
+  - `isActive` — `false` if the account has been deactivated
+  - `totalSessions` — lifetime completed session count
+  - `lastLogin` — ISO 8601 timestamp of most recent login
+  - `createdAt` / `updatedAt` — ISO 8601 timestamps
+  - `resumes` — array of resume summaries `{ fileName, originalName, isDefault, parseStatus, createdAt }`
+</ResponseField>
+
+```bash
+curl -X GET http://localhost:5000/api/users/profile \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "user": {
+    "_id": "664a1f...",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "role": "candidate",
+    "avatar": null,
+    "credits": 8,
+    "isPremium": false,
+    "isActive": true,
+    "totalSessions": 5,
+    "lastLogin": "2024-11-01T12:00:00.000Z",
+    "createdAt": "2024-10-15T09:30:00.000Z",
+    "updatedAt": "2024-11-01T12:00:00.000Z",
+    "resumes": [
+      {
+        "_id": "665b2a...",
+        "fileName": "resumes/ada_lovelace_cv_xk9f2.pdf",
+        "originalName": "ada_lovelace_cv.pdf",
+        "isDefault": true,
+        "parseStatus": "parsed",
+        "createdAt": "2024-11-01T10:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Update Profile
+
+<span style={{background:"#7c3aed",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>PUT</span> `/api/users/profile`
+
+🔒 **Requires authentication.**
+
+Updates the authenticated user's display name and/or avatar URL. Only the `name` and `avatar` fields are accepted; all other fields are silently ignored. At least one must be present.
+
+**Request body**
+
+<ParamField body="name" type="string">
+  Updated display name. Must meet the 2–50 character length rule enforced by the User model.
+</ParamField>
+
+<ParamField body="avatar" type="string">
+  URL of the user's avatar image.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The updated user document.
+</ResponseField>
+
+```bash
+curl -X PUT http://localhost:5000/api/users/profile \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ada King",
+    "avatar": "https://example.com/avatars/ada.png"
+  }'
+```
+
+```json
+{
+  "success": true,
+  "user": {
+    "_id": "664a1f...",
+    "name": "Ada King",
+    "email": "ada@example.com",
+    "avatar": "https://example.com/avatars/ada.png",
+    "updatedAt": "2024-11-02T09:15:00.000Z"
+  }
+}
+```
+
+---
+
+## Change Password
+
+<span style={{background:"#7c3aed",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>PUT</span> `/api/users/change-password`
+
+🔒 **Requires authentication.**
+
+Changes the authenticated user's password. The current password is verified before the new one is saved. The `passwordChangedAt` timestamp is updated, which invalidates any access tokens issued before the change.
+
+**Request body**
+
+<ParamField body="currentPassword" type="string" required>
+  The user's existing password. Must match the stored bcrypt hash; returns `401` if incorrect.
+</ParamField>
+
+<ParamField body="newPassword" type="string" required>
+  The desired new password. Must satisfy the same rules as registration: minimum 8 characters with at least one uppercase letter, one lowercase letter, and one digit.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Password updated successfully."`
+</ResponseField>
+
+```bash
+curl -X PUT http://localhost:5000/api/users/change-password \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "currentPassword": "Secure1Pass",
+    "newPassword": "NewSecure2Pass"
+  }'
+```
+
+```json
+{
+  "success": true,
+  "message": "Password updated successfully."
+}
+```
+
+---
+
+## Get Dashboard
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/users/dashboard`
+
+🔒 **Requires authentication.**
+
+Returns aggregated statistics for the candidate dashboard: session counts, score averages, best score, and the five most recently completed sessions with their interview context. All metrics are scoped to the authenticated user.
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Dashboard statistics object:
+
+  <ResponseField name="data.totalSessions" type="number">
+    Total number of sessions created by the user (all statuses).
+  </ResponseField>
+
+  <ResponseField name="data.completedSessions" type="number">
+    Number of sessions with `status: "completed"`.
+  </ResponseField>
+
+  <ResponseField name="data.averageScore" type="string">
+    Average `overallScore` across all completed sessions, formatted to one decimal place (e.g. `"74.3"`). Returns `0` if no scored sessions exist.
+  </ResponseField>
+
+  <ResponseField name="data.bestScore" type="number">
+    Highest `overallScore` achieved across all completed sessions. Returns `0` if no scored sessions exist.
+  </ResponseField>
+
+  <ResponseField name="data.recentSessions" type="array">
+    Array of up to 5 most recently completed sessions, each populated with `interviewId: { jobTitle, company, experienceLevel }` and the session's `overallScore`, `status`, and `completedAt`.
+  </ResponseField>
+</ResponseField>
+
+```bash
+curl -X GET http://localhost:5000/api/users/dashboard \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "totalSessions": 7,
+    "completedSessions": 5,
+    "averageScore": "74.3",
+    "bestScore": 88,
+    "recentSessions": [
+      {
+        "_id": "668e5f...",
+        "interviewId": {
+          "_id": "666c3d...",
+          "jobTitle": "Senior Backend Engineer",
+          "company": "TechCorp",
+          "experienceLevel": "senior"
+        },
+        "overallScore": 88,
+        "status": "completed",
+        "completedAt": "2024-11-01T15:30:00.000Z"
+      },
+      {
+        "_id": "668d4a...",
+        "interviewId": {
+          "_id": "665f2b...",
+          "jobTitle": "Full Stack Developer",
+          "company": null,
+          "experienceLevel": "mid"
+        },
+        "overallScore": 72,
+        "status": "completed",
+        "completedAt": "2024-10-28T11:00:00.000Z"
+      }
+    ]
+  }
+}
+```

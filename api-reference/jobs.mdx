@@ -1,0 +1,474 @@
+---
+title: "Jobs Endpoints — Search, Listings, and Recommendations"
+sidebarTitle: "Jobs"
+description: "Access Hiretrack's job system: paginated DB listings, live Adzuna search with natural-language query optimization, categories, AI recommendations, and question generation."
+---
+
+The jobs API combines two data sources and several supporting features. **Database-backed listings** (`GET /api/jobs`) serve from a locally synced MongoDB (with optional PostgreSQL fallback) collection of active jobs that the background sync scheduler keeps up to date. **Live Adzuna search** (`GET /api/jobs/search`) queries the Adzuna API in real-time with query optimization, deduplication, Redis caching, circuit-breaker protection, and pagination. Additional endpoints cover category lookup, AI-powered personalized recommendations based on your parsed resume, fetching a single job by Adzuna ID, and generating interview questions directly from a job description.
+
+Authentication is required only for the `recommended` and `generate-questions` endpoints.
+
+<Note>
+  **Search requires at least one of `q` or `what`.** Supplying `q` triggers natural-language query optimization (the query is parsed and expanded by the optimizer pipeline before being sent to Adzuna). Supplying `what` sends the keyword directly. If neither is present the API returns `422 Unprocessable Entity`.
+</Note>
+
+---
+
+## Job Object
+
+<ResponseField name="id" type="string">
+  Adzuna numeric job ID (from live search) or MongoDB ObjectId (from DB listings).
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  Job title.
+</ResponseField>
+
+<ResponseField name="company" type="string">
+  Company name.
+</ResponseField>
+
+<ResponseField name="location" type="string">
+  Job location string. Defaults to `"Remote"`.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Full job description.
+</ResponseField>
+
+<ResponseField name="salaryMin" type="number | null">
+  Minimum salary figure (currency depends on country). `null` if not provided.
+</ResponseField>
+
+<ResponseField name="salaryMax" type="number | null">
+  Maximum salary figure. `null` if not provided.
+</ResponseField>
+
+<ResponseField name="category" type="string">
+  Adzuna category tag or DB category string (e.g. `"it-jobs"`, `"Engineering"`).
+</ResponseField>
+
+<ResponseField name="contractType" type="string">
+  One of `full_time`, `part_time`, `contract`, `internship`, or `temporary`.
+</ResponseField>
+
+<ResponseField name="applyUrl" type="string">
+  Direct application URL.
+</ResponseField>
+
+<ResponseField name="source" type="string">
+  Data source identifier (e.g. `"Adzuna"`).
+</ResponseField>
+
+<ResponseField name="skills" type="array">
+  Array of skill strings extracted or inferred for the role.
+</ResponseField>
+
+<ResponseField name="postedTime" type="string">
+  ISO 8601 timestamp when the job was posted or synced.
+</ResponseField>
+
+---
+
+## List Job Listings
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/jobs`
+
+Returns paginated active job listings from the database (PostgreSQL if configured, MongoDB otherwise). Supports filtering by keyword, location, category, contract type, and minimum salary.
+
+**Query parameters**
+
+<ParamField query="page" type="integer">
+  Page number (≥ 1). Defaults to `1`.
+</ParamField>
+
+<ParamField query="limit" type="integer">
+  Items per page (1–100). Defaults to `10`.
+</ParamField>
+
+<ParamField query="keyword" type="string">
+  Full-text keyword filter applied to title, company, description, and skills.
+</ParamField>
+
+<ParamField query="location" type="string">
+  Filter by location string.
+</ParamField>
+
+<ParamField query="category" type="string">
+  Filter by job category.
+</ParamField>
+
+<ParamField query="contractType" type="string">
+  Filter by contract type. One of `full_time`, `part_time`, `contract`, `internship`, `temporary`.
+</ParamField>
+
+<ParamField query="salaryMin" type="number">
+  Numeric minimum salary filter.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="jobs" type="array">
+  Array of job objects from the database.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total matching jobs.
+</ResponseField>
+
+<ResponseField name="page" type="number">
+  Current page.
+</ResponseField>
+
+<ResponseField name="totalPages" type="number">
+  Total pages.
+</ResponseField>
+
+```bash
+curl "http://localhost:5000/api/jobs?keyword=Node.js&location=London&page=1&limit=10"
+```
+
+```json
+{
+  "success": true,
+  "jobs": [
+    {
+      "_id": "669f7a...",
+      "title": "Node.js Backend Developer",
+      "company": "FinTech Ltd",
+      "location": "London",
+      "contractType": "full_time",
+      "salaryMin": 70000,
+      "salaryMax": 90000,
+      "category": "Engineering",
+      "skills": ["Node.js", "TypeScript", "PostgreSQL"],
+      "isActive": true,
+      "postedTime": "2024-10-28T09:00:00.000Z"
+    }
+  ],
+  "total": 42,
+  "page": 1,
+  "totalPages": 5
+}
+```
+
+---
+
+## Search Jobs (Live Adzuna)
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/jobs/search`
+
+Performs a live search against the Adzuna API with query optimization, Redis caching, deduplication, and relevance scoring. Either `q` (natural language) or `what` (keyword) is required.
+
+**Query parameters**
+
+<ParamField query="q" type="string">
+  Natural-language query (max 500 characters). When provided, the optimizer pipeline parses and expands it into structured Adzuna parameters before the request is made.
+</ParamField>
+
+<ParamField query="what" type="string">
+  Direct keyword search (max 200 characters). Takes precedence over `q` for the keyword parameter.
+</ParamField>
+
+<ParamField query="where" type="string">
+  Location string (max 200 characters), e.g. `"London"` or `"Remote"`.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number (1–50). Defaults to `1`.
+</ParamField>
+
+<ParamField query="results" type="integer">
+  Results per page (1–50). Defaults to `20`.
+</ParamField>
+
+<ParamField query="country" type="string">
+  2-letter ISO country code (e.g. `gb`, `us`). Defaults to the value of `ADZUNA_COUNTRY` env var.
+</ParamField>
+
+<ParamField query="sortBy" type="string">
+  Sort field. One of `date`, `salary`, or `relevance`. Defaults to `relevance`.
+</ParamField>
+
+<ParamField query="sortDir" type="string">
+  Sort direction. `up` (ascending) or `down` (descending). Defaults to `down`.
+</ParamField>
+
+<ParamField query="salaryMin" type="integer">
+  Minimum salary filter (positive integer).
+</ParamField>
+
+<ParamField query="salaryMax" type="integer">
+  Maximum salary filter (positive integer).
+</ParamField>
+
+<ParamField query="category" type="string">
+  Adzuna category tag (max 100 characters). Use `GET /api/jobs/categories` to retrieve valid tags.
+</ParamField>
+
+<ParamField query="contract" type="string">
+  Contract type filter. One of `full_time`, `part_time`, `contract`, or `permanent`.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="page" type="number">
+  Current page number.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total matching results reported by Adzuna.
+</ResponseField>
+
+<ResponseField name="totalPages" type="number">
+  Total pages available.
+</ResponseField>
+
+<ResponseField name="hasNextPage" type="boolean">
+  `true` if more pages exist.
+</ResponseField>
+
+<ResponseField name="results" type="array">
+  Array of normalized job objects including `title`, `company`, `location`, `salary`, `summary`, `apply_url`, `id`, `skills`, `posted_at`, and a relevance `score`.
+</ResponseField>
+
+<ResponseField name="rawQuery" type="string | null">
+  The original `q` value submitted, if any.
+</ResponseField>
+
+<ResponseField name="queryMeta" type="object">
+  Metadata from the query optimizer: `parser` (strategy used) and `ambiguityScore`.
+</ResponseField>
+
+<ResponseField name="duplicatesRemoved" type="number">
+  Count of duplicate results deduplicated before returning.
+</ResponseField>
+
+```bash
+curl "http://localhost:5000/api/jobs/search?q=senior+backend+engineer+remote&page=1&results=10&country=gb"
+```
+
+```json
+{
+  "page": 1,
+  "total": 834,
+  "totalPages": 84,
+  "hasNextPage": true,
+  "results": [
+    {
+      "id": "4174923847",
+      "title": "Senior Backend Engineer (Node.js)",
+      "company": "StartupXYZ",
+      "location": "Remote",
+      "salary": "£70,000 – £90,000",
+      "summary": "We are looking for a senior backend engineer to build scalable microservices...",
+      "apply_url": "https://www.adzuna.co.uk/jobs/details/4174923847",
+      "skills": ["Node.js", "AWS", "Docker", "PostgreSQL"],
+      "posted_at": "2024-10-30T00:00:00.000Z",
+      "score": 0.94
+    }
+  ],
+  "rawQuery": "senior backend engineer remote",
+  "queryMeta": { "parser": "rule-based", "ambiguityScore": 8 },
+  "duplicatesRemoved": 2
+}
+```
+
+---
+
+## Get Job Categories
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/jobs/categories`
+
+Returns a list of Adzuna job categories for a given country. Use the returned `tag` values as the `category` parameter in `/api/jobs/search`.
+
+**Query parameters**
+
+<ParamField query="country" type="string">
+  2-letter ISO country code (e.g. `gb`, `us`). Defaults to the configured `ADZUNA_COUNTRY` env var.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="categories" type="array">
+  Array of category objects, each with `label` (display name) and `tag` (Adzuna category identifier string).
+</ResponseField>
+
+```bash
+curl "http://localhost:5000/api/jobs/categories?country=gb"
+```
+
+```json
+{
+  "success": true,
+  "categories": [
+    { "label": "IT Jobs", "tag": "it-jobs" },
+    { "label": "Engineering Jobs", "tag": "engineering-jobs" },
+    { "label": "Accounting & Finance Jobs", "tag": "accounting-finance-jobs" }
+  ]
+}
+```
+
+---
+
+## Get Recommended Jobs
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/jobs/recommended`
+
+🔒 **Requires authentication.**
+
+Returns AI-matched job recommendations based on the skills extracted from the authenticated user's default resume (or their most recently updated resume). The matching service compares the user's skill set against stored job listings and returns those with a skill-match score of 60% or above. If no parsed resume is found, an empty results array is returned with a prompt to upload a resume.
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="results" type="array">
+  Array of matched job objects with a `matchScore` or relevance indicator.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Populated only when no parsed resume is available: `"Please upload and parse your resume to get personalized recommendations."`.
+</ResponseField>
+
+```bash
+curl -X GET http://localhost:5000/api/jobs/recommended \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "results": [
+    {
+      "_id": "669f7a...",
+      "title": "Senior Node.js Engineer",
+      "company": "CloudCo",
+      "location": "Remote",
+      "skills": ["Node.js", "TypeScript", "AWS"],
+      "matchScore": 0.87
+    }
+  ]
+}
+```
+
+---
+
+## Generate Interview Questions from Job Description
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/jobs/generate-questions`
+
+🔒 **Requires authentication.**
+
+Generates 5 interview questions tailored to a specific job title and description using the AI service. This is a lightweight alternative to the full interview creation + generate flow — useful for quickly generating questions from a job listing.
+
+**Request body**
+
+<ParamField body="jobTitle" type="string" required>
+  The job title to generate questions for. Cannot be empty.
+</ParamField>
+
+<ParamField body="jobDescription" type="string" required>
+  The job description text. Cannot be empty.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="questions" type="array">
+  Array of 5 question objects, each containing `questionText`, `category`, `difficulty`, and `expectedKeywords`.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/jobs/generate-questions \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jobTitle": "Senior Node.js Engineer",
+    "jobDescription": "We are looking for a senior Node.js engineer to build and maintain high-performance microservices on AWS, working closely with frontend and DevOps teams."
+  }'
+```
+
+```json
+{
+  "success": true,
+  "questions": [
+    {
+      "questionText": "How do you handle backpressure in a Node.js streaming pipeline?",
+      "category": "technical",
+      "difficulty": "hard",
+      "expectedKeywords": ["streams", "pause", "resume", "highWaterMark", "pipe"]
+    },
+    {
+      "questionText": "Describe your approach to structuring a microservices architecture on AWS.",
+      "category": "technical",
+      "difficulty": "hard",
+      "expectedKeywords": ["Lambda", "API Gateway", "SQS", "service discovery", "fault tolerance"]
+    }
+  ]
+}
+```
+
+---
+
+## Get Job by ID
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/jobs/:id`
+
+Returns details for a single job by its numeric Adzuna ID. The job is fetched (with Redis caching) from the Adzuna API.
+
+**Path parameters**
+
+<ParamField path="id" type="string" required>
+  Numeric Adzuna job ID (e.g. `4174923847`). Must be a numeric string.
+</ParamField>
+
+**Query parameters**
+
+<ParamField query="country" type="string">
+  Optional 2-letter ISO country code. Defaults to the `ADZUNA_COUNTRY` env var.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Normalized single job object.
+</ResponseField>
+
+```bash
+curl "http://localhost:5000/api/jobs/4174923847?country=gb"
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "4174923847",
+    "title": "Senior Backend Engineer (Node.js)",
+    "company": "StartupXYZ",
+    "location": "Remote",
+    "salary": "£70,000 – £90,000",
+    "description": "We are looking for a senior backend engineer to build scalable microservices...",
+    "apply_url": "https://www.adzuna.co.uk/jobs/details/4174923847",
+    "skills": ["Node.js", "AWS", "Docker", "PostgreSQL"],
+    "posted_at": "2024-10-30T00:00:00.000Z"
+  }
+}
+```

@@ -1,0 +1,228 @@
+---
+title: "Authentication and Authorization in Hiretrack"
+sidebarTitle: "Authentication"
+description: "How Hiretrack handles JWT-based candidate and admin authentication, token lifecycle, role-based access control, and the admin permission system."
+---
+
+Hiretrack uses two separate JWT-based authentication flows — one for candidates and one for administrators. Both flows issue short-lived access tokens and longer-lived refresh tokens, but they are protected by separate middleware stacks so that a candidate token can never be used to access admin routes, and vice versa. All tokens are signed with secrets defined in your [environment variables](/configuration/environment-variables).
+
+---
+
+## Candidate Authentication
+
+### Registration
+
+Send a `POST` request to `/api/auth/register` with the following JSON body:
+
+```json
+{
+  "name": "Jane Smith",
+  "email": "jane@example.com",
+  "password": "Secure123"
+}
+```
+
+Password requirements (enforced by the `User` model):
+
+- Minimum **8 characters**
+- Must contain at least one **uppercase** letter
+- Must contain at least one **lowercase** letter
+- Must contain at least one **number**
+
+### Login
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "jane@example.com",
+  "password": "Secure123"
+}
+```
+
+A successful response returns:
+
+```json
+{
+  "success": true,
+  "accessToken": "<jwt-access-token>",
+  "refreshToken": "<jwt-refresh-token>",
+  "user": {
+    "_id": "...",
+    "name": "Jane Smith",
+    "email": "jane@example.com",
+    "role": "candidate",
+    "avatar": null,
+    "totalSessions": 0,
+    "createdAt": "2025-01-01T00:00:00.000Z"
+  }
+}
+```
+
+### Token Lifetimes
+
+| Token | Default expiry | Environment variable |
+|---|---|---|
+| Access token | `7d` | `JWT_EXPIRE` |
+| Refresh token | `30d` | `JWT_REFRESH_EXPIRE` |
+
+### Using the Access Token
+
+Include the access token as a `Bearer` credential in the `Authorization` header of every protected request:
+
+```http
+Authorization: Bearer <accessToken>
+```
+
+The `protect` middleware verifies this token on every protected route. It also checks whether the user's account is active, not banned, and whether the password has changed since the token was issued.
+
+### Refreshing the Access Token
+
+When the access token expires, exchange the refresh token for a new access token:
+
+```http
+POST /api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "<refreshToken>"
+}
+```
+
+### Current User Profile
+
+```http
+GET /api/auth/me
+Authorization: Bearer <accessToken>
+```
+
+### Logout
+
+```http
+POST /api/auth/logout
+Authorization: Bearer <accessToken>
+```
+
+Logout invalidates the stored refresh token, preventing it from being used to issue new access tokens.
+
+### Curl Examples
+
+<Tabs>
+  <Tab title="Login">
+    ```bash
+    curl -X POST http://localhost:5000/api/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{"email":"jane@example.com","password":"Secure123"}'
+    ```
+  </Tab>
+  <Tab title="Authenticated Request">
+    ```bash
+    # Store the token from the login response
+    TOKEN="<accessToken>"
+
+    curl http://localhost:5000/api/auth/me \
+      -H "Authorization: Bearer $TOKEN"
+    ```
+  </Tab>
+  <Tab title="Refresh Token">
+    ```bash
+    curl -X POST http://localhost:5000/api/auth/refresh \
+      -H "Content-Type: application/json" \
+      -d '{"refreshToken":"<refreshToken>"}'
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  Do not store access tokens or refresh tokens in `localStorage` in production. Browser storage is accessible to any JavaScript running on the page, making it vulnerable to XSS attacks. Prefer `httpOnly` cookies or an in-memory store combined with a short-lived token rotation strategy.
+</Warning>
+
+<Note>
+  If a user changes their password, all previously issued access tokens are immediately invalidated. The `protect` middleware calls `user.changedPasswordAfter(decoded.iat)` — which compares the token's `iat` (issued-at) claim against the `passwordChangedAt` field on the `User` document — and rejects any token that was issued before the password change. Affected users must log in again.
+</Note>
+
+---
+
+## Admin Authentication
+
+### Login
+
+Admin users authenticate via a separate endpoint:
+
+```http
+POST /api/admin/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@example.com",
+  "password": "AdminPass123"
+}
+```
+
+This returns its own `accessToken` and `refreshToken` pair. These tokens are validated by `adminAuth.middleware.js` (`protectAdmin`), which additionally confirms that the token holder carries an admin-level role (`admin` or `super_admin`).
+
+### Accessing Admin Routes
+
+All `/api/admin/*` routes require the admin bearer token:
+
+```http
+Authorization: Bearer <adminAccessToken>
+```
+
+The authenticated user is attached to `req.admin` (and also to `req.user` for compatibility with shared controllers). A `candidate` token presented to an admin route receives a `403 Access denied. Admin privileges required.` error.
+
+### Seeding the First Admin
+
+Before any admin can log in, run the seed script once against your MongoDB instance:
+
+```bash
+node backend/src/scripts/seedAdmin.js
+```
+
+This creates (or updates) a `super_admin` account in the database. **Change the credentials immediately after seeding** — the script is intended only for initial platform bootstrapping.
+
+### Roles and Role Hierarchy
+
+Hiretrack defines five roles on the `User` model:
+
+| Role | Description |
+|---|---|
+| `candidate` | Default role. Can create interviews, upload resumes, and view their own sessions. |
+| `support` | Can view and update users; can view payments and issue refunds; can view logs. |
+| `content_manager` | Can manage job listings and interview templates; can run the job scraper. |
+| `admin` | Broad administrative access across users, jobs, templates, prompts, analytics, and settings. |
+| `super_admin` | Unrestricted wildcard access (`*`) to every permission in the system. |
+
+The role hierarchy is `super_admin > admin > content_manager / support > candidate`.
+
+The `requireSuperAdmin` middleware (used after `protectAdmin`) restricts specific actions — such as deleting users — to `super_admin` only.
+
+### Admin Permission System
+
+Roles below `super_admin` are governed by a granular permission map defined in `rbac.js`. The `requirePermission(permission)` middleware enforces these checks at the route level.
+
+| Permission | Roles granted | Action |
+|---|---|---|
+| `view:users` | `admin`, `support` | List and view candidate accounts |
+| `update:users` | `admin`, `support` | Update user profile and status |
+| `view:jobs` | `admin`, `content_manager` | Browse job listings |
+| `create:jobs` | `admin`, `content_manager` | Add new job listings |
+| `update:jobs` | `admin`, `content_manager` | Edit existing job listings |
+| `delete:jobs` | `admin`, `content_manager` | Remove job listings |
+| `view:templates` | `admin`, `content_manager` | Browse interview templates |
+| `create:templates` | `admin`, `content_manager` | Add new interview templates |
+| `update:templates` | `admin`, `content_manager` | Edit interview templates |
+| `delete:templates` | `admin`, `content_manager` | Remove interview templates |
+| `view:payments` | `admin`, `support` | View transaction records |
+| `refund:payments` | `support` | Issue payment refunds |
+| `view:scraper` | `admin`, `content_manager` | View scraper status and logs |
+| `run:scraper` | `admin`, `content_manager` | Trigger the job scraper manually |
+| `view:prompts` | `admin` | View AI system prompts |
+| `update:prompts` | `admin` | Update AI system prompts via the dashboard |
+| `view:logs` | `admin`, `support` | View audit and application logs |
+| `view:analytics` | `admin` | View platform analytics dashboards |
+| `view:settings` | `admin` | View system settings |
+| `update:settings` | `admin` | Modify system settings |
+
+`super_admin` bypasses all individual permission checks via the `*` wildcard.

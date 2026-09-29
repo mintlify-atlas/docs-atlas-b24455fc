@@ -1,0 +1,292 @@
+---
+title: "Prompts & Templates — Hiretrack Admin"
+sidebarTitle: "Prompts & Templates"
+description: "Customise the AI system prompts driving question generation, answer evaluation, and resume parsing; create and manage reusable interview templates."
+---
+
+Admins can customise the AI system prompts that power interview question generation, answer evaluation, resume parsing, and live interview responses — all without touching source code. Prompts are stored in the `SystemPrompt` MongoDB collection with full version history, so every change is auditable and any previous version can be restored with a single API call. Alongside prompts, reusable interview templates let you pre-configure difficulty, duration, question count, evaluation criteria, and voice settings for consistent candidate experiences.
+
+---
+
+## System prompts
+
+Hiretrack ships with a set of default prompts that are auto-seeded on the first call to `GET /api/admin/prompts` if no records exist yet. Changes to these prompts take effect immediately for all new interviews — there is no cache layer between the admin prompt editor and the Groq inference calls.
+
+<Warning>
+Changing a system prompt immediately affects **all new interviews** on the live platform. Always test prompt changes on a staging environment before applying them to production. Use the version restore endpoint to roll back quickly if a prompt causes unexpected AI behaviour.
+</Warning>
+
+### List all prompts — `GET /api/admin/prompts`
+
+Returns all system prompts sorted by name, with the `lastUpdatedBy` admin populated.
+
+```http
+GET /api/admin/prompts
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "64a...",
+      "category": "ats_scorer",
+      "name": "Candidate Alignment Match Scorer",
+      "description": "Scores the relevance match rate between candidates and active platform listings.",
+      "content": "You are a strict technical recruiter...",
+      "version": 3,
+      "lastUpdatedBy": { "name": "Aftab Admin", "email": "aftab@admin.com" },
+      "updatedAt": "2025-01-14T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+### Get a single prompt — `GET /api/admin/prompts/:id`
+
+Returns the full prompt document including the complete `history` array, with each history entry's `updatedBy` admin populated.
+
+```http
+GET /api/admin/prompts/64a...
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "prompt": {
+    "_id": "64a...",
+    "category": "ats_scorer",
+    "name": "Candidate Alignment Match Scorer",
+    "content": "You are a strict technical recruiter...",
+    "version": 3,
+    "history": [
+      {
+        "version": 2,
+        "content": "Previous prompt text...",
+        "changeReason": "Refined scoring criteria",
+        "updatedBy": { "name": "Aftab Admin", "email": "aftab@admin.com" },
+        "updatedAt": "2025-01-10T09:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+### Update a prompt — `PATCH /api/admin/prompts/:id`
+
+Requires the `update:prompts` permission. The current active prompt is pushed into `history` before the new content is saved, and the `version` counter is incremented.
+
+```http
+PATCH /api/admin/prompts/64a...
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "content": "You are a strict technical recruiter evaluating a candidate's resume against a job description.\n\nAnalyze the match rate...",
+  "changeReason": "Improved skill gap detection wording"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `content` | ✅ | The new prompt text (cannot be empty) |
+| `changeReason` | optional | Human-readable reason stored in version history |
+
+### Restore a previous version — `POST /api/admin/prompts/:id/restore`
+
+Requires the `update:prompts` permission. Looks up the specified version number in the prompt's `history` array, saves the current active content into history, and makes the target content live.
+
+```http
+POST /api/admin/prompts/64a.../restore
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "targetVersion": 1
+}
+```
+
+```json
+{
+  "success": true,
+  "message": "Successfully restored prompt to version v1. Current active version is now v4.",
+  "prompt": { ... }
+}
+```
+
+---
+
+## Prompt categories
+
+Six prompt categories are registered in the `SystemPrompt` schema. Each drives a distinct part of the Hiretrack AI pipeline:
+
+| Category | Name | Purpose |
+|----------|------|---------|
+| `interview` | Interview Conversation Follow-Up | Defines the AI interviewer persona for Socket.io live voice sessions |
+| `resume_parser` | Structured Resume & JD Extractor | Parses unstructured resume files and job descriptions into structured JSON |
+| `ats_scorer` | Candidate Alignment Match Scorer | Computes an ATS match score (0–100) with skill gap analysis |
+| `feedback_report` | Interview Session Final Report Evaluator | Produces the final session report with technical and communication scores |
+| `career_coach` | Interactive Career Coach Advice | Powers the career guidance and improvement suggestions feature |
+| `job_recommendation` | Platform Job Recommendations | Matches candidate profiles to available job listings |
+
+---
+
+## Template variable substitution
+
+Several prompts accept dynamic variables that are interpolated at runtime using a `formatPrompt()` helper. Variables use the `${variableName}` syntax.
+
+### Variables by category
+
+<Info>
+Variables are replaced in-process before the prompt is sent to the Groq API. Only the variables listed below are substituted for each category — others are left as-is or cause a runtime error if the expected value is absent.
+</Info>
+
+**`ats_scorer`**
+
+```
+${jobTitle}              — The target job title from the interview config
+${questionText}          — The interview question being evaluated
+${expectedKeywordsText}  — Comma-separated expected keywords for this question
+${answerText}            — The candidate's transcribed answer
+```
+
+**`feedback_report`**
+
+```
+${jobTitle}   — Job title from the parent interview
+${summary}    — Aggregated summary of the full session's Q&A
+```
+
+**`resume_parser`**
+
+No template variables are used. The full resume content and job description text are injected as the user message, keeping the system prompt generic and reusable.
+
+**`interview`**
+
+Used as-is for the Socket.io live interviewer behaviour — no variable substitution. The prompt defines personality, tone, and formatting constraints for real-time follow-up responses during voice sessions.
+
+**Example: `ats_scorer` prompt with substitution**
+
+```text
+You are a strict technical recruiter evaluating a candidate's resume
+against a job description for the role: ${jobTitle}.
+
+Question asked: ${questionText}
+Expected keywords: ${expectedKeywordsText}
+Candidate answer: ${answerText}
+
+Analyze the match rate and compute a score out of 100...
+```
+
+---
+
+## Interview templates
+
+Interview templates provide reusable, pre-configured interview setups that can be applied when starting a new mock interview. Each template bundles prompt text, difficulty, duration, question count, and voice settings into a single document stored in the `InterviewTemplate` collection.
+
+### List all templates — `GET /api/admin/templates`
+
+Returns a paginated, filterable list of interview templates with the creating admin populated.
+
+```http
+GET /api/admin/templates?page=1&limit=12&difficulty=hard
+Authorization: Bearer <admin_access_token>
+```
+
+| Query parameter | Values | Description |
+|-----------------|--------|-------------|
+| `page` | integer | Page number (default `1`) |
+| `limit` | integer | Results per page (default `12`) |
+| `search` | string | Case-insensitive match on template `name` |
+| `difficulty` | `easy` \| `medium` \| `hard` | Filter by difficulty level |
+
+### Create a template — `POST /api/admin/templates`
+
+Requires the `create:templates` permission.
+
+```http
+POST /api/admin/templates
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Senior Backend Engineer — Hard",
+  "difficulty": "hard",
+  "duration": 45,
+  "questionCount": 8,
+  "systemPrompt": "You are a senior backend interviewer. Focus on system design, databases, and distributed systems...",
+  "evaluationPrompt": "Evaluate the candidate's answer on technical depth, trade-off awareness, and communication clarity...",
+  "feedbackPrompt": "Provide a detailed final report with scores for technical depth and communication...",
+  "voiceId": "onyx",
+  "voiceSpeed": 1.0,
+  "voicePitch": 1.0,
+  "language": "en"
+}
+```
+
+**Template fields**
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `name` | ✅ | — | Template display name |
+| `systemPrompt` | ✅ | — | AI system prompt for the live interviewer |
+| `evaluationPrompt` | ✅ | — | Prompt used to score individual answers |
+| `feedbackPrompt` | ✅ | — | Prompt used to generate the final session report |
+| `difficulty` | optional | `medium` | `easy`, `medium`, or `hard` |
+| `duration` | optional | `30` | Session duration in minutes (minimum 5) |
+| `questionCount` | optional | `5` | Number of questions to ask (minimum 1) |
+| `voiceId` | optional | `alloy` | TTS voice: `alloy`, `echo`, `fable`, `onyx`, `nova`, or `shimmer` |
+| `voiceSpeed` | optional | `1.0` | Playback speed (0.5 – 2.0) |
+| `voicePitch` | optional | `1.0` | Voice pitch (0.5 – 2.0) |
+| `language` | optional | `en` | BCP 47 language code |
+
+### Get a template — `GET /api/admin/templates/:id`
+
+```http
+GET /api/admin/templates/64b...
+Authorization: Bearer <admin_access_token>
+```
+
+Returns the full template document with the `postedBy` admin populated.
+
+### Update a template — `PATCH /api/admin/templates/:id`
+
+Requires the `update:templates` permission. Send only the fields you want to change — all fields are optional.
+
+```http
+PATCH /api/admin/templates/64b...
+Authorization: Bearer <admin_access_token>
+Content-Type: application/json
+```
+
+```json
+{
+  "duration": 60,
+  "questionCount": 10,
+  "voiceId": "nova"
+}
+```
+
+### Delete a template — `DELETE /api/admin/templates/:id`
+
+Requires the `delete:templates` permission. Permanently removes the template document.
+
+```http
+DELETE /api/admin/templates/64b...
+Authorization: Bearer <admin_access_token>
+```
+
+```json
+{
+  "success": true,
+  "message": "Interview template deleted."
+}
+```

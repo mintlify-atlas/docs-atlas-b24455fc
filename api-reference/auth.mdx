@@ -1,0 +1,262 @@
+---
+title: "Authentication Endpoints — Register, Login, Tokens"
+sidebarTitle: "Auth"
+description: "JWT authentication for Hiretrack: register an account, log in, refresh tokens, retrieve the current user, and log out."
+---
+
+Hiretrack uses a dual-token JWT strategy. On successful login the API issues a short-lived **access token** (used in the `Authorization: Bearer` header on every protected request) and a long-lived **refresh token** (used to obtain a new access token without re-authenticating). Both tokens are signed with separate secrets — `JWT_SECRET` for access tokens and `JWT_REFRESH_SECRET` for refresh tokens.
+
+All auth endpoints live under the `/api/auth` prefix. Only `GET /api/auth/me` and `POST /api/auth/logout` require an access token.
+
+<Note>
+  **Password requirements** — passwords must be at least 8 characters and contain at least one uppercase letter, one lowercase letter, and one digit (e.g. `MyPass1!`). Requests that do not meet this rule receive `400 Bad Request` before the database is touched.
+</Note>
+
+---
+
+## Register
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/auth/register`
+
+Creates a new candidate account. Duplicate email addresses are rejected with `409 Conflict`.
+
+**Request body**
+
+<ParamField body="name" type="string" required>
+  Full name of the user. Must be between 2 and 50 characters.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  A valid email address. Stored lowercase after normalization. Must be unique.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Password for the account. Minimum 8 characters; must include at least one uppercase letter, one lowercase letter, and one digit.
+</ParamField>
+
+**Response `201 Created`**
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="accessToken" type="string">
+  Short-lived JWT for authenticating subsequent requests.
+</ResponseField>
+
+<ResponseField name="refreshToken" type="string">
+  Long-lived JWT for refreshing the access token.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  Newly created user object (see User object reference in the Users section).
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "password": "Secure1Pass"
+  }'
+```
+
+```json
+{
+  "success": true,
+  "accessToken": "eyJhbGci...",
+  "refreshToken": "eyJhbGci...",
+  "user": {
+    "_id": "664a1f...",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "role": "candidate",
+    "credits": 10,
+    "isPremium": false,
+    "isActive": true,
+    "createdAt": "2024-11-01T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Login
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/auth/login`
+
+Authenticates an existing user and returns a new token pair. Returns `401` when the credentials are wrong, and `403` when the account is deactivated or banned.
+
+**Request body**
+
+<ParamField body="email" type="string" required>
+  The registered email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The account password.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="accessToken" type="string">
+  Short-lived JWT. Pass this in `Authorization: Bearer <accessToken>` on every protected request.
+</ResponseField>
+
+<ResponseField name="refreshToken" type="string">
+  Long-lived JWT. Store securely (e.g. `httpOnly` cookie or secure storage) and use with `POST /api/auth/refresh`.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The authenticated user object including `_id`, `name`, `email`, `role`, `credits`, `isPremium`, `lastLogin`, and `totalSessions`.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "ada@example.com",
+    "password": "Secure1Pass"
+  }'
+```
+
+```json
+{
+  "success": true,
+  "accessToken": "eyJhbGci...",
+  "refreshToken": "eyJhbGci...",
+  "user": {
+    "_id": "664a1f...",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "role": "candidate",
+    "credits": 10,
+    "isPremium": false,
+    "lastLogin": "2024-11-01T12:00:00.000Z",
+    "totalSessions": 3
+  }
+}
+```
+
+---
+
+## Refresh Token
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/auth/refresh`
+
+Issues a new access token using a valid refresh token. The refresh token itself is not rotated by this endpoint; the same refresh token may be reused until it expires or the user logs out.
+
+**Request body**
+
+<ParamField body="refreshToken" type="string" required>
+  The refresh token previously returned by `login` or `register`.
+</ParamField>
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="accessToken" type="string">
+  A freshly signed access token.
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{ "refreshToken": "eyJhbGci..." }'
+```
+
+```json
+{
+  "success": true,
+  "accessToken": "eyJhbGci..."
+}
+```
+
+---
+
+## Get Current User
+
+<span style={{background:"#2563eb",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>GET</span> `/api/auth/me`
+
+🔒 **Requires authentication.**
+
+Returns the full profile of the currently authenticated user. Useful for rehydrating session state on app load.
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The user document for the caller. Contains `_id`, `name`, `email`, `role`, `avatar`, `credits`, `isPremium`, `isActive`, `totalSessions`, `lastLogin`, and timestamps.
+</ResponseField>
+
+```bash
+curl -X GET http://localhost:5000/api/auth/me \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "user": {
+    "_id": "664a1f...",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "role": "candidate",
+    "avatar": null,
+    "credits": 10,
+    "isPremium": false,
+    "isActive": true,
+    "totalSessions": 3,
+    "lastLogin": "2024-11-01T12:00:00.000Z",
+    "createdAt": "2024-10-15T09:30:00.000Z",
+    "updatedAt": "2024-11-01T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Logout
+
+<span style={{background:"#16a34a",color:"#fff",borderRadius:"4px",padding:"2px 8px",fontWeight:700,fontFamily:"monospace",fontSize:"0.85em"}}>POST</span> `/api/auth/logout`
+
+🔒 **Requires authentication.**
+
+Signals the server that the user is logging out. Discard both the access token and refresh token on the client after calling this endpoint. Future requests with the discarded tokens will fail once the access token expires.
+
+**Request body**
+
+None required.
+
+**Response `200 OK`**
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Logged out successfully."`
+</ResponseField>
+
+```bash
+curl -X POST http://localhost:5000/api/auth/logout \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+```json
+{
+  "success": true,
+  "message": "Logged out successfully."
+}
+```
