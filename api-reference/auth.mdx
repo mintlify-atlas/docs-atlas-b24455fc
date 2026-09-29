@@ -1,7 +1,7 @@
 ---
 title: "Authentication Endpoints — Register, Login, Tokens"
 sidebarTitle: "Auth"
-description: "JWT authentication for Hiretrack: register an account, log in, refresh tokens, retrieve the current user, and log out."
+description: "JWT authentication for Hiretrack: register an account, log in, refresh access tokens, retrieve the current user profile, and log out securely."
 ---
 
 Hiretrack uses a dual-token JWT strategy. On successful login the API issues a short-lived **access token** (used in the `Authorization: Bearer` header on every protected request) and a long-lived **refresh token** (used to obtain a new access token without re-authenticating). Both tokens are signed with separate secrets — `JWT_SECRET` for access tokens and `JWT_REFRESH_SECRET` for refresh tokens.
@@ -49,7 +49,7 @@ Creates a new candidate account. Duplicate email addresses are rejected with `40
 </ResponseField>
 
 <ResponseField name="user" type="object">
-  Newly created user object (see User object reference in the Users section).
+  Newly created user object containing `_id`, `name`, `email`, `role`, `avatar`, `totalSessions`, and `createdAt`.
 </ResponseField>
 
 ```bash
@@ -72,9 +72,8 @@ curl -X POST http://localhost:5000/api/auth/register \
     "name": "Ada Lovelace",
     "email": "ada@example.com",
     "role": "candidate",
-    "credits": 10,
-    "isPremium": false,
-    "isActive": true,
+    "avatar": null,
+    "totalSessions": 0,
     "createdAt": "2024-11-01T12:00:00.000Z"
   }
 }
@@ -113,7 +112,7 @@ Authenticates an existing user and returns a new token pair. Returns `401` when 
 </ResponseField>
 
 <ResponseField name="user" type="object">
-  The authenticated user object including `_id`, `name`, `email`, `role`, `credits`, `isPremium`, `lastLogin`, and `totalSessions`.
+  The authenticated user object containing `_id`, `name`, `email`, `role`, `avatar`, `totalSessions`, and `createdAt`.
 </ResponseField>
 
 ```bash
@@ -135,10 +134,9 @@ curl -X POST http://localhost:5000/api/auth/login \
     "name": "Ada Lovelace",
     "email": "ada@example.com",
     "role": "candidate",
-    "credits": 10,
-    "isPremium": false,
-    "lastLogin": "2024-11-01T12:00:00.000Z",
-    "totalSessions": 3
+    "avatar": null,
+    "totalSessions": 3,
+    "createdAt": "2024-10-15T09:30:00.000Z"
   }
 }
 ```

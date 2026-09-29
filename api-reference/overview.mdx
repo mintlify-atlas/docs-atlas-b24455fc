@@ -1,5 +1,5 @@
 ---
-title: "Hiretrack REST API — Overview and Authentication"
+title: "Hiretrack REST API — Overview, Auth, and Pagination"
 sidebarTitle: "Overview"
 description: "Complete reference for the Hiretrack REST API: base URLs, authentication, response envelopes, status codes, rate limiting, and pagination."
 ---
@@ -140,3 +140,4 @@ Endpoints that return lists accept `page` and `limit` query parameters and inclu
 | Multiple | `/api/interviews` | Create interviews, generate questions, list, retrieve, delete | ✅ Yes |
 | Multiple | `/api/sessions` | Start sessions, submit answers, complete, list, retrieve | ✅ Yes |
 | Multiple | `/api/jobs` | DB listings, live Adzuna search, categories, recommendations, question generation | Partial |
+| Multiple | `/api/admin` | Admin authentication and privileged resource management (out of scope) | ✅ Yes |

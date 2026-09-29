@@ -1,5 +1,5 @@
 ---
-title: "Get Hiretrack Running Locally in Minutes"
+title: "Quickstart: Set Up Hiretrack on Your Local Machine"
 sidebarTitle: "Quickstart"
 description: "Clone the repo, configure your API keys, and run both the Express backend and React frontend with a single command on your local machine."
 ---
@@ -38,7 +38,7 @@ Make sure the following are available before you begin:
     npm run install:all
     ```
 
-    This is equivalent to running `npm install` inside `backend/` and then `npm install` inside `frontend/`. The root `package.json` uses [concurrently](https://www.npmjs.com/package/concurrently) to orchestrate both applications.
+    This is equivalent to running `npm install` inside `backend/` and then `npm install` inside `frontend/`. The root `package.json` also provides a `npm run dev` command that uses [concurrently](https://www.npmjs.com/package/concurrently) to start both development servers together.
   </Step>
 
   <Step title="Configure the backend environment">
@@ -86,12 +86,12 @@ Make sure the following are available before you begin:
     RATE_LIMIT_WINDOW_MS=900000
     RATE_LIMIT_MAX=100
 
-    # ── Redis ────────────────────────────────────────────────────────────
+    # ── Redis (optional — omit or set REDIS_ENABLED=false to disable) ────
     REDIS_ENABLED=true
     REDIS_HOST=127.0.0.1
     REDIS_PORT=6379
 
-    # ── Adzuna Job Search (optional) ─────────────────────────────────────
+    # ── Adzuna Job Search (optional — enables live job board search) ──────
     ADZUNA_APP_ID=your_app_id
     ADZUNA_APP_KEY=your_app_key
     ADZUNA_COUNTRY=in
@@ -112,11 +112,12 @@ Make sure the following are available before you begin:
     The only required variable for local development is the backend API URL:
 
     ```env frontend/.env
-    VITE_API_URL=http://localhost:5000
+    VITE_API_URL=http://localhost:5000/api
+    VITE_APP_NAME=AI Interview Prep
     ```
 
     <Tip>
-      In development, Vite's built-in proxy (configured in `frontend/vite.config.js`) forwards all requests that begin with `/api` to `http://localhost:5000`. This means your frontend code can call `/api/auth/login` without hard-coding the backend host, and CORS is handled transparently.
+      In development, Vite's built-in proxy (configured in `frontend/vite.config.js`) forwards all requests that begin with `/api` to `http://localhost:5000`. This means your frontend code can call `/api/auth/login` without hard-coding the full backend URL, and CORS is handled transparently. `VITE_API_URL` is set to `http://localhost:5000/api` to match this proxy path.
     </Tip>
   </Step>
 

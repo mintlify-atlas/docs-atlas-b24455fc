@@ -1,7 +1,7 @@
 ---
-title: "Live Interview Sessions with Real-Time AI Feedback"
+title: "Live Interview Sessions with Real-Time AI Follow-Ups"
 sidebarTitle: "Live Interview"
-description: "Start a session, answer questions one by one, and receive streamed AI interviewer follow-ups over Socket.io powered by Groq's llama-3.3-70b-versatile model."
+description: "Start a session and answer interview questions. Each answer triggers a streamed AI follow-up over Socket.io, powered by Groq llama-3.3-70b-versatile."
 ---
 
 Once an interview's questions are generated, a session presents them to you one by one. After you submit each answer, a conversational AI interviewer responds with a brief 1–3 sentence follow-up, streamed in real time over Socket.io. The session tracks every answer and the time taken per question. When you finish, calling the complete endpoint triggers AI evaluation of each answer and generates your final report.
@@ -20,7 +20,7 @@ Content-Type: application/json
 }
 ```
 
-The interview must have `questions` populated (i.e. `generationStatus: "generated"`). If an active session for this interview already exists for the current user, it is returned with `resumed: true` instead of creating a duplicate.
+The interview must have questions populated (i.e. `generationStatus: "generated"`). If an active session for this interview already exists for the current user, it is returned with `resumed: true` instead of creating a duplicate.
 
 ```json
 {
@@ -36,7 +36,7 @@ The interview must have `questions` populated (i.e. `generationStatus: "generate
   "interview": {
     "_id": "64f2b3c4d5e6f7a8b9c0d2e3",
     "jobTitle": "Senior Backend Engineer",
-    "questions": [ ... ]
+    "questions": [ ]
   }
 }
 ```
@@ -53,8 +53,8 @@ Content-Type: application/json
   The `_id` of the question subdocument from the interview. Must belong to the linked interview.
 </ParamField>
 
-<ParamField body="answerText" type="string" required>
-  The candidate's typed answer for this question.
+<ParamField body="answerText" type="string">
+  The candidate's typed answer for this question. If omitted, defaults to an empty string.
 </ParamField>
 
 <ParamField body="timeTaken" type="number">
@@ -158,9 +158,9 @@ POST /api/sessions/:id/complete
 Authorization: Bearer <token>
 ```
 
-Ending a session triggers two AI operations in parallel:
+Ending a session triggers two AI operations:
 
-1. **Per-answer evaluation** — each non-skipped answer is scored 1–10 by Groq with constructive feedback.
+1. **Per-answer evaluation** — each non-skipped answer is scored 1–10 by Groq with constructive feedback. Skipped answers automatically receive `aiScore: 0`.
 2. **Overall report generation** — `generateOverallFeedback` produces an `overallScore` (1–100), `strengths`, `weaknesses`, and `improvementTips` arrays.
 
 The session `status` is set to `"completed"`, `completedAt` is stamped, and the linked interview status is updated to `"completed"`. The user's `totalSessions` counter is incremented.

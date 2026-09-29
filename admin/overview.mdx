@@ -1,7 +1,7 @@
 ---
-title: "Admin Dashboard Overview — Hiretrack"
+title: "Hiretrack Admin Dashboard: Complete Platform Overview"
 sidebarTitle: "Overview"
-description: "Full operational control over Hiretrack: users, interviews, sessions, resumes, jobs, AI prompts, subscription plans, payments, and system settings."
+description: "Full operational control over Hiretrack: manage candidates, interviews, AI prompts, subscription plans, payments, and global system settings from one API."
 ---
 
 The Hiretrack admin dashboard gives authorised staff complete operational visibility and control over the platform. From a single API surface you can manage every candidate, inspect every mock interview session, tune the AI prompts that power Groq (Llama 3.3) responses, configure subscription plans and process refunds, control the Adzuna job scraper, and adjust global system settings — all without touching application source code.
@@ -29,6 +29,8 @@ The script connects to the URI in your `.env`, checks whether the admin account 
 
 <Warning>
 `seedAdmin.js` contains a hardcoded password (`passwore123`) and a hardcoded email (`aftab@admin.com`). **Change both values before running the script in any production or staging environment.** Committing real credentials to source control is a security risk.
+
+When run against an **existing** admin account the script resets the role to `admin` (not `super_admin`) and resets the password. The `adminAuth` middleware automatically self-heals the `aftab@admin.com` account back to `super_admin` on next login, but you should verify the role after seeding if you rely on `super_admin` privileges immediately.
 </Warning>
 
 ## Admin roles and permissions
@@ -90,9 +92,6 @@ The stats endpoint provides a real-time snapshot of the entire platform, aggrega
     "newUsersThisWeek": 27,
     "totalInterviews": 1204,
     "interviewsToday": 18,
-    "totalSessions": 3871,
-    "completedSessions": 2944,
-    "totalResumes": 619,
     "jobsCount": 156,
     "applicationsCount": 4490,
     "totalRevenue": 8431.50,
@@ -132,9 +131,10 @@ Key fields returned by `GET /api/admin/stats`:
 |-------|-------------|
 | `totalUsers` | Total candidate accounts (excludes admin users) |
 | `premiumUsers` / `freeUsers` | Premium vs free candidate split |
+| `activeUsers` | Candidates with `isActive: true` |
+| `newUsersThisWeek` | New candidate registrations in the last 7 days |
 | `totalInterviews` | All interview configs ever created |
-| `totalSessions` | All session runs (includes in-progress and completed) |
-| `totalResumes` | All uploaded resume files |
+| `interviewsToday` | Interviews created since midnight today |
 | `jobsCount` | Active (non-archived) job listings |
 | `applicationsCount` | Combined resumes + sessions (proxy for application activity) |
 | `totalRevenue` | Sum of all `success`-status transactions |

@@ -1,7 +1,7 @@
 ---
-title: "Real-Time Interview Streaming via Socket.io"
+title: "Hiretrack Real-Time Interview Streaming via Socket.io"
 sidebarTitle: "WebSocket"
-description: "Stream AI interviewer responses token-by-token during live interview sessions using the Hiretrack Socket.io interface."
+description: "Stream AI-generated interviewer responses token-by-token during live interview sessions using Hiretrack's Socket.io interface and the Groq LLM."
 ---
 
 Hiretrack uses [Socket.io](https://socket.io) to stream AI interviewer responses token-by-token during live interview sessions. Rather than waiting for a complete AI response before rendering anything, the server emits each text fragment individually as it arrives from Groq — producing a natural, real-time conversational effect in the UI. The Socket.io server is attached to the **same HTTP server** as the REST API, so no separate port or host is required.
@@ -185,7 +185,7 @@ The interviewer's behavior is governed by a system prompt. The server first atte
 
 Admins can view and update this prompt via the Admin Dashboard at **Settings → Prompt Editor**, which calls:
 
-```
+```http
 PATCH /api/admin/prompts/:id
 ```
 

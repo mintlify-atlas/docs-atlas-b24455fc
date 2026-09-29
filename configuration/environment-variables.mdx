@@ -1,5 +1,5 @@
 ---
-title: "Environment Variables Reference for Hiretrack"
+title: "Hiretrack JWT, AI, and Service Environment Variables"
 sidebarTitle: "Env Variables"
 description: "Complete reference for every environment variable used by Hiretrack's backend and frontend — required credentials, defaults, and optional feature flags."
 ---
@@ -113,19 +113,19 @@ Hiretrack reads all external service credentials, feature flags, and runtime set
 </Note>
 
 <ParamField path="REDIS_ENABLED" type="boolean" default="true">
-  Set to `false` to disable Redis entirely. When disabled, the Redis client is never instantiated and no connection attempts are made.
-</ParamField>
-
-<ParamField path="REDIS_HOST" type="string" default="127.0.0.1">
-  Hostname of the Redis server. Used when `REDIS_URL` is not set.
-</ParamField>
-
-<ParamField path="REDIS_PORT" type="number" default="6379">
-  Port of the Redis server. Used when `REDIS_URL` is not set.
+  Set to `false` to disable Redis entirely. When disabled, the Redis client is never instantiated and no connection attempts are made. Controlled by checking `process.env.REDIS_ENABLED !== 'false'` in `backend/src/config/redis.js`.
 </ParamField>
 
 <ParamField path="REDIS_URL" type="string">
   Full Redis connection URL (e.g. `redis://localhost:6379` or a hosted URL such as `rediss://...`). Takes precedence over `REDIS_HOST` and `REDIS_PORT` when set. Use this for Redis services that provide a single connection string (Upstash, Railway, Render, etc.).
+</ParamField>
+
+<ParamField path="REDIS_HOST" type="string" default="127.0.0.1">
+  Hostname of the Redis server. Used to construct the connection URL when `REDIS_URL` is not set.
+</ParamField>
+
+<ParamField path="REDIS_PORT" type="number" default="6379">
+  Port of the Redis server. Used to construct the connection URL when `REDIS_URL` is not set.
 </ParamField>
 
 ---
@@ -133,7 +133,7 @@ Hiretrack reads all external service credentials, feature flags, and runtime set
 ### Adzuna Job Search
 
 <Note>
-  Adzuna credentials are optional. When they are absent, the live job-search endpoint (`/api/jobs/search`) and the scheduled job-synchronisation service will be unavailable, but the rest of the job board continues to serve listings from the local MongoDB (or PostgreSQL) database.
+  Adzuna credentials are optional. When `ADZUNA_APP_ID` or `ADZUNA_APP_KEY` are absent, the Adzuna service throws a `MISSING_CREDENTIALS` error on any live job-search request. All other platform features continue to work normally using data already stored in MongoDB.
 </Note>
 
 <ParamField path="ADZUNA_APP_ID" type="string">
@@ -141,18 +141,22 @@ Hiretrack reads all external service credentials, feature flags, and runtime set
 </ParamField>
 
 <ParamField path="ADZUNA_APP_KEY" type="string">
-  Your Adzuna application key. Used together with `ADZUNA_APP_ID` to authenticate live search and synchronisation requests.
+  Your Adzuna application key. Used together with `ADZUNA_APP_ID` to authenticate live search and job-detail requests.
 </ParamField>
 
-<ParamField path="ADZUNA_COUNTRY" type="string">
-  Two-letter ISO 3166-1 country code targeting which Adzuna regional index to query (e.g. `in` for India, `gb` for the UK, `us` for the United States).
+<ParamField path="ADZUNA_COUNTRY" type="string" default="gb">
+  Two-letter ISO 3166-1 country code targeting which Adzuna regional index to query (e.g. `in` for India, `gb` for the UK, `us` for the United States). Defaults to `gb` when not set.
+</ParamField>
+
+<ParamField path="ADZUNA_PREFETCH_PAGES" type="number" default="3">
+  Number of Adzuna result pages to fetch concurrently per search query. Each Adzuna page returns 20 raw jobs by default, so the default of `3` prefetches up to 60 raw jobs per request before deduplication, scoring, and pagination.
 </ParamField>
 
 ---
 
 ## Backend `.env` Example
 
-```ini filename="backend/.env"
+```ini
 # =============================================
 # AI Interview App - Backend Environment Variables
 # =============================================
@@ -188,16 +192,17 @@ CLIENT_URL=http://localhost:5173
 RATE_LIMIT_WINDOW_MS=900000
 RATE_LIMIT_MAX=100
 
-# Redis (optional)
-REDIS_ENABLED=true
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
+# Redis (optional — omit or set REDIS_ENABLED=false to disable)
+# REDIS_ENABLED=true
 # REDIS_URL=redis://localhost:6379
+# REDIS_HOST=127.0.0.1
+# REDIS_PORT=6379
 
 # Adzuna Job Search (optional)
 # ADZUNA_APP_ID=your_adzuna_app_id
 # ADZUNA_APP_KEY=your_adzuna_app_key
 # ADZUNA_COUNTRY=in
+# ADZUNA_PREFETCH_PAGES=3
 ```
 
 ---
@@ -205,7 +210,7 @@ REDIS_PORT=6379
 ## Frontend Variables
 
 <ParamField path="VITE_API_URL" type="string" required>
-  Base URL for all API requests made by the React frontend. In development, set this to `/api` so that the Vite dev server proxy forwards requests to the backend on port 5000. In a standalone deployment without a proxy, use the full backend URL, e.g. `https://api.yourapp.com/api`.
+  Base URL for all API requests made by the React frontend. In development, set this to the full backend URL, e.g. `http://localhost:5000/api`. In production, set it to your deployed backend API base URL.
 </ParamField>
 
 <ParamField path="VITE_APP_NAME" type="string" default="AI Interview Prep">
@@ -214,7 +219,7 @@ REDIS_PORT=6379
 
 ## Frontend `.env` Example
 
-```ini filename="frontend/.env"
+```ini
 VITE_API_URL=http://localhost:5000/api
 VITE_APP_NAME=AI Interview Prep
 ```

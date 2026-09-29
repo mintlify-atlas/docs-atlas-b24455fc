@@ -1,5 +1,5 @@
 ---
-title: "Prompts & Templates — Hiretrack Admin"
+title: "Hiretrack Admin: AI Prompts and Interview Templates"
 sidebarTitle: "Prompts & Templates"
 description: "Customise the AI system prompts driving question generation, answer evaluation, and resume parsing; create and manage reusable interview templates."
 ---
@@ -149,7 +149,7 @@ Variables are replaced in-process before the prompt is sent to the Groq API. Onl
 
 **`ats_scorer`**
 
-```
+```text
 ${jobTitle}              — The target job title from the interview config
 ${questionText}          — The interview question being evaluated
 ${expectedKeywordsText}  — Comma-separated expected keywords for this question
@@ -158,7 +158,7 @@ ${answerText}            — The candidate's transcribed answer
 
 **`feedback_report`**
 
-```
+```text
 ${jobTitle}   — Job title from the parent interview
 ${summary}    — Aggregated summary of the full session's Q&A
 ```

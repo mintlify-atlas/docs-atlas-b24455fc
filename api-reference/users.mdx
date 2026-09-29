@@ -1,7 +1,7 @@
 ---
-title: "User Endpoints — Profile, Dashboard, and Account"
+title: "Users API — Profile, Password Change, and Dashboard"
 sidebarTitle: "Users"
-description: "Manage Hiretrack user profiles, update account details, change passwords, and retrieve dashboard statistics including session counts and average interview scores."
+description: "Manage Hiretrack user profiles, update display name and avatar, change passwords, and retrieve dashboard statistics including session counts and scores."
 ---
 
 The users API provides profile management and account operations for the authenticated candidate. All four endpoints are grouped under `/api/users` and every one requires a valid Bearer token. Use these endpoints to display and update the user's public profile, enforce password changes, and power the candidate dashboard with session statistics.
@@ -147,7 +147,7 @@ Changes the authenticated user's password. The current password is verified befo
 </ParamField>
 
 <ParamField body="newPassword" type="string" required>
-  The desired new password. Must satisfy the same rules as registration: minimum 8 characters with at least one uppercase letter, one lowercase letter, and one digit.
+  The desired new password. Must be at least 8 characters (enforced by the User model).
 </ParamField>
 
 **Response `200 OK`**

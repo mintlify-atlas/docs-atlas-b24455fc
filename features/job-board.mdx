@@ -1,7 +1,7 @@
 ---
 title: "Job Board, Search, and AI Recommendations in Hiretrack"
 sidebarTitle: "Job Board"
-description: "Browse database-backed listings, search Adzuna live with Redis caching and circuit breaker protection, and get AI-powered job recommendations matched against your parsed resume skills."
+description: "Browse MongoDB listings, run live Adzuna searches with Redis caching, and get AI-powered job recommendations matched against your parsed resume skills."
 ---
 
 Hiretrack includes a full job board powered by three data paths: a MongoDB-backed listing store for locally managed and scheduled-sync jobs, a live Adzuna API search pipeline with Redis caching and circuit breaker protection, and an AI recommendation engine that compares your parsed resume skills against active job requirements to surface the best matches. You can also generate targeted interview questions directly from any job description.
@@ -10,7 +10,7 @@ Hiretrack includes a full job board powered by three data paths: a MongoDB-backe
 
 <CardGroup cols={3}>
   <Card title="Database listings" icon="database">
-    `GET /api/jobs` — paginated MongoDB (with optional PostgreSQL fallback) listings, filtered by keyword, location, category, contract type, and minimum salary.
+    `GET /api/jobs` — paginated MongoDB listings, filtered by keyword, location, category, contract type, and minimum salary.
   </Card>
   <Card title="Live Adzuna search" icon="magnifying-glass">
     `GET /api/jobs/search` — real-time Adzuna API query with query optimization, Redis caching (15 min TTL), circuit breaker, automatic retries, and stale fallback.
@@ -24,7 +24,6 @@ Hiretrack includes a full job board powered by three data paths: a MongoDB-backe
 
 ```http
 GET /api/jobs
-Authorization: Bearer <token> (optional)
 ```
 
 Returns active job listings from MongoDB. When a PostgreSQL connection is configured, `postgresJobService` is attempted first and falls back to MongoDB automatically.
@@ -92,16 +91,16 @@ Requires either `q` (natural-language query) or `what` (keyword) — the endpoin
 
 ### Redis caching
 
-Search results are cached at two levels:
+Search results are cached at multiple levels using SHA-256 hashed query parameters as part of the key:
 
 | Level | Cache key format | TTL |
 |-------|-----------------|-----|
-| Sorted list | `jobs:sorted:{sha256(query_params)}` | 15 minutes |
-| Per-page result | `jobs:{sha256(query_params)}:page:{page}` | 15 minutes |
+| Sorted list | `jobs:sorted:{hash(query_params)}` | 15 minutes |
+| Per-page result | `jobs:{hash(query_params)}:page:{page}` | 15 minutes |
 | Job detail | `job:{job_id}` | 1 hour |
-| Stale fallback | `jobs:stale:{sha256(query_params)}` | 7 days |
+| Stale fallback | `jobs:stale:{hash(query_params)}` | 7 days |
 
-The SHA-256 hash is computed from all non-empty query parameters sorted alphabetically, so `{ what: "python", where: "london" }` and `{ where: "london", what: "python" }` produce the same cache key. When Redis is unavailable, every cache method returns `null` silently and the request falls through to a live Adzuna call — no error reaches the client.
+The hash is a 16-character hex prefix of a SHA-256 digest computed from all non-empty query parameters sorted alphabetically, so `{ what: "python", where: "london" }` and `{ where: "london", what: "python" }` produce the same cache key. When Redis is unavailable, every cache method returns `null` silently and the request falls through to a live Adzuna call — no error reaches the client.
 
 If the Adzuna API fails entirely and a stale cache entry exists, the stale results are served with `isFallback: true` in the response metadata.
 
@@ -115,7 +114,7 @@ Authorization: Bearer <token>
 Requires authentication. Hiretrack fetches your default resume (or most recently updated resume if no default is set) and reads the `parsedData.skills` array. The `matchUserToJobs` service then:
 
 1. Queries all active jobs from MongoDB (`isActive: true`).
-2. For each job, extracts its `skills` array. If the array is empty, it scans the job `description` for known technology keywords.
+2. For each job, uses its `skills` array. If the array is empty, it scans the job `description` for known technology keywords.
 3. Calculates a match percentage: `(overlapping skills / total job skills) × 100`.
 4. Returns only jobs with **≥ 60% match**, sorted by highest match score first.
 
@@ -187,10 +186,10 @@ Hiretrack runs two background jobs that keep the job database fresh:
 
 <CardGroup cols={2}>
   <Card title="Job sync" icon="rotate">
-    Runs every **3 hours**. Fetches recent listings from Adzuna and upserts them into MongoDB by `adzunaId`. New jobs are created; existing jobs are updated.
+    Runs every **3 hours** (`cron: 0 */3 * * *`). Fetches recent listings from Adzuna and upserts them into MongoDB by `adzunaId`. New jobs are created; existing jobs are updated. An initial sync also runs 15 seconds after server boot.
   </Card>
   <Card title="Job cleanup" icon="trash">
-    Runs **daily**. Deactivates stale listings by setting `isActive: false` on jobs that have exceeded the configured maximum age, keeping the board free of outdated postings.
+    Runs **daily at midnight** (`cron: 0 0 * * *`). Soft-deactivates stale listings by setting `isActive: false` on jobs whose `postedTime` or `createdAt` is older than 30 days. An initial cleanup also runs 30 seconds after server boot.
   </Card>
 </CardGroup>
 

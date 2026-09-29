@@ -1,7 +1,7 @@
 ---
-title: "Interview Setup and Question Generation in Hiretrack"
+title: "Interview Setup and AI Question Generation in Hiretrack"
 sidebarTitle: "Interview Setup"
-description: "Configure a mock interview with a job role and description. Hiretrack uses RAG and Groq to generate grounded technical and behavioral questions tailored to your resume."
+description: "Configure a mock interview with job title and description. Hiretrack uses RAG and Groq to generate grounded, role-specific questions from your resume."
 ---
 
 Before starting a live session, you configure an interview by providing a job title, a job description, your experience level, and optionally a resume. Hiretrack stores this configuration and, when you trigger generation, runs a full RAG pipeline: the job description and resume are chunked, embedded with OpenAI, retrieved via cosine similarity, and passed to Groq's `llama-3.3-70b-versatile` model which generates structured questions grounded strictly in the retrieved context.
@@ -22,6 +22,10 @@ Before starting a live session, you configure an interview by providing a job ti
 
 <ParamField body="numberOfQuestions" type="number">
   Total questions to generate. Must be between **3 and 20**, inclusive. Defaults to `10`.
+</ParamField>
+
+<ParamField body="questionTypes" type="string[]">
+  Array of question categories to include. Accepted values: `technical`, `behavioral`, `situational`, `hr`, `culture_fit`. Defaults to `["technical", "behavioral"]`. The AI generation pipeline always produces a ~2/3 technical, ~1/3 behavioral split regardless of this field; the value is stored for reference.
 </ParamField>
 
 <ParamField body="company" type="string">
@@ -221,5 +225,21 @@ Returns the full interview document including all generated questions, populated
       "fileUrl": "https://res.cloudinary.com/..."
     }
   }
+}
+```
+
+## Delete an interview
+
+```http
+DELETE /api/interviews/:id
+Authorization: Bearer <token>
+```
+
+Permanently removes the interview document and all its associated questions. Returns HTTP 404 if the interview does not exist or does not belong to the authenticated user.
+
+```json
+{
+  "success": true,
+  "message": "Interview deleted."
 }
 ```

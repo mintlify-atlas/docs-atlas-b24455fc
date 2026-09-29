@@ -1,5 +1,5 @@
 ---
-title: "AI Models and RAG Pipeline Configuration"
+title: "Hiretrack AI Models and RAG Pipeline Configuration"
 sidebarTitle: "AI Models"
 description: "Configure Groq and OpenAI in Hiretrack: LLM completions, temperature presets, the RAG embedding pipeline, and admin-overridable system prompts."
 ---
@@ -14,7 +14,7 @@ Hiretrack uses two AI providers — Groq for LLM completions and OpenAI for text
 
 All chat completions in Hiretrack use:
 
-```
+```text
 llama-3.3-70b-versatile
 ```
 
@@ -64,11 +64,21 @@ Every task whose response is parsed as JSON passes `response_format: { type: 'js
 
 ### Live Streaming
 
-The Socket.io handler (`backend/src/socket.js`) uses Groq's streaming API. It emits:
+The Socket.io handler (`backend/src/socket.js`) uses Groq's streaming API. It listens for the `live_answer` event from the client and emits:
 
 - `ai_chunk` — one streamed text fragment as it arrives
 - `ai_complete` — signals the response is finished
 - `ai_error` — signals a generation failure
+
+The `live_answer` event payload must include:
+
+```json
+{
+  "questionText": "Describe a time you optimised a slow database query.",
+  "answerText": "I used EXPLAIN ANALYZE to identify a missing index...",
+  "expectedKeywords": ["index", "EXPLAIN", "query plan"]
+}
+```
 
 Streaming uses `temperature: 0.5` and `max_tokens: 150` to keep live follow-up responses concise and responsive.
 
@@ -80,7 +90,7 @@ Streaming uses `temperature: 0.5` and `max_tokens: 150` to keep live follow-up r
 
 Embeddings are generated using:
 
-```
+```text
 text-embedding-3-small
 ```
 
@@ -162,12 +172,16 @@ If no database record exists for a category, the service falls back to the hardc
 
 ### Prompt Categories
 
+The `SystemPrompt` model's `category` field is an enum defined in `backend/src/models/SystemPrompt.model.js`. All six valid categories are listed below:
+
 | Category | Used by | Default behaviour |
 |---|---|---|
-| `resume_parser` | `parseResumeAndJD()` | Extracts name, skills, experience, projects, education from the resume; extracts role, required skills, preferred skills, and responsibilities from the JD |
+| `resume_parser` | `parseResumeAndJD()` | Extracts name, skills, experience, projects, and education from the resume; extracts role, required skills, preferred skills, and responsibilities from the JD |
 | `ats_scorer` | `evaluateAnswer()` | Scores a candidate answer 1–10 on correctness, clarity, and depth; returns `{ score, feedback }` |
 | `feedback_report` | `generateOverallFeedback()` | Produces an overall score (1–100), strengths, weaknesses, and improvement tips for the complete session |
-| `interview` | Interview generation flows | General interview generation guidance (category reserved for future prompt customisation) |
+| `interview` | Live interview socket handler (`socket.js`) | Provides conversational follow-up acknowledgment after each candidate answer during a live session |
+| `career_coach` | Reserved | Category defined in the model schema; no active service function uses it in the current release |
+| `job_recommendation` | Reserved | Category defined in the model schema; no active service function uses it in the current release |
 
 ### Updating a Prompt
 
@@ -179,8 +193,17 @@ Authorization: Bearer <adminAccessToken>
 Content-Type: application/json
 
 {
-  "content": "You are an expert resume parser. Extract...\n\nReturn strict JSON only."
+  "content": "You are an expert resume parser. Extract...\\n\\nReturn strict JSON only."
 }
 ```
 
-The `${variable}` placeholder syntax is supported in prompt templates. For example, `${jobTitle}` and `${answerText}` in the `ats_scorer` prompt are substituted by `formatPrompt()` before the request is sent to Groq.
+### Template Variable Substitution
+
+The `${variable}` placeholder syntax is supported in prompt templates. The `formatPrompt()` function in `ai.service.js` replaces all `${key}` occurrences before the prompt is sent to Groq. The variables available depend on which category is being rendered:
+
+| Category | Available variables |
+|---|---|
+| `ats_scorer` | `${jobTitle}`, `${questionText}`, `${expectedKeywordsText}`, `${answerText}` |
+| `feedback_report` | `${jobTitle}`, `${summary}` |
+
+`${expectedKeywordsText}` is the comma-joined string of expected answer keywords (e.g. `"React, hooks, useState"`). `${summary}` is a multi-line string of all question/score/answer pairs for the session.

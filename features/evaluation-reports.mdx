@@ -1,7 +1,7 @@
 ---
-title: "Evaluation Reports and AI Scoring in Hiretrack"
+title: "AI Evaluation Reports and Session Scoring in Hiretrack"
 sidebarTitle: "Evaluation Reports"
-description: "Hiretrack generates per-answer scores and an overall session report using Groq. Each answer is rated 1–10 with feedback; the session report covers strengths, weaknesses, and improvement tips."
+description: "Hiretrack scores each answer 1–10 and produces a holistic 1–100 report with strengths, weaknesses, and actionable improvement tips on session completion."
 ---
 
 After a session completes, Hiretrack runs two levels of AI evaluation powered by Groq's `llama-3.3-70b-versatile` model: a per-answer score with constructive feedback for each response, and a holistic session report that synthesises every answer into an overall score, a strengths list, a weaknesses list, and actionable improvement tips. Both levels are generated in a single call to `POST /api/sessions/:id/complete` and stored permanently on the session document.
@@ -26,7 +26,7 @@ Each non-skipped answer is evaluated by `evaluateAnswer` in `ai.service.js`. The
 ```
 
 <ResponseField name="score" type="number">
-  Integer from **1 to 10**. Skipped questions receive a score of `0` without calling the AI.
+  Integer from **1 to 10** returned by Groq. Skipped questions bypass the AI and are assigned `aiScore: 0` directly by the server.
 </ResponseField>
 <ResponseField name="feedback" type="string">
   Constructive paragraph explaining the evaluation result based on correctness, clarity, and depth. Written from the perspective of an interviewer.
@@ -69,57 +69,10 @@ After all per-answer evaluations complete, `generateOverallFeedback` sends a sum
   Gaps in knowledge or communication style that could cost points in a real interview.
 </ResponseField>
 <ResponseField name="improvementTips" type="string[]">
-  Specific, actionable recommendations for what to study or practise before the next interview.
+  Specific, actionable recommendations for what to study or practise before the next interview. Also stored as `recommendedResources` on the session document.
 </ResponseField>
 
-If the AI call fails, `overallScore` falls back to an automatic calculation: the average of all `aiScore` values scaled to 100.
-
-## Strict evaluation mode
-
-For deeper analysis, `evaluateStrictAnswer` provides a richer breakdown that ties every point of feedback directly to the retrieved context used to generate the question. This mode is stricter — vague or generic answers are penalized even when they happen to include correct keywords.
-
-### Strict evaluation JSON shape
-
-```json
-{
-  "score": 6,
-  "correctness": "medium",
-  "strengths": [
-    "Correctly identified Redis as the appropriate tool for session caching"
-  ],
-  "weaknesses": [
-    "Did not explain the eviction policy or how cache size was managed"
-  ],
-  "missed_concepts": [
-    "LRU eviction",
-    "maxmemory-policy configuration",
-    "Redis Sentinel for high availability"
-  ],
-  "improvement_suggestions": [
-    "Research Redis eviction policies (LRU, LFU, volatile-lru) and when to use each",
-    "Explain how you sized the Redis instance relative to your dataset"
-  ]
-}
-```
-
-<ResponseField name="score" type="number">
-  Integer from **0 to 10**.
-</ResponseField>
-<ResponseField name="correctness" type="string">
-  `low`, `medium`, or `high`. Reflects how accurately the answer maps to the expected concepts in the RAG-retrieved context.
-</ResponseField>
-<ResponseField name="strengths" type="string[]">
-  Specific concepts or phrases in the answer that were correct and well-expressed.
-</ResponseField>
-<ResponseField name="weaknesses" type="string[]">
-  Specific shortcomings identified in the answer.
-</ResponseField>
-<ResponseField name="missed_concepts" type="string[]">
-  Concepts present in the retrieved context that the candidate failed to address.
-</ResponseField>
-<ResponseField name="improvement_suggestions" type="string[]">
-  Targeted recommendations tied to the missed concepts.
-</ResponseField>
+If the AI call fails, `overallScore` falls back to an automatic calculation: the average of all `aiScore` values scaled to 100 using `session.calculateOverallScore()`.
 
 ## Retrieve a completed session
 

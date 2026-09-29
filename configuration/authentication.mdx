@@ -1,5 +1,5 @@
 ---
-title: "Authentication and Authorization in Hiretrack"
+title: "Hiretrack JWT Authentication and Role-Based Access"
 sidebarTitle: "Authentication"
 description: "How Hiretrack handles JWT-based candidate and admin authentication, token lifecycle, role-based access control, and the admin permission system."
 ---
@@ -22,7 +22,7 @@ Send a `POST` request to `/api/auth/register` with the following JSON body:
 }
 ```
 
-Password requirements (enforced by the `User` model):
+Password requirements (enforced by `registerValidation` in `auth.routes.js`):
 
 - Minimum **8 characters**
 - Must contain at least one **uppercase** letter
@@ -59,6 +59,8 @@ A successful response returns:
   }
 }
 ```
+
+The response shape is produced by `sendTokenResponse()` in `backend/src/utils/jwt.utils.js`. The access token payload contains `{ id: userId }` signed with `JWT_SECRET`; the refresh token payload contains the same `{ id: userId }` signed with `JWT_REFRESH_SECRET`.
 
 ### Token Lifetimes
 
@@ -180,7 +182,7 @@ Before any admin can log in, run the seed script once against your MongoDB insta
 node backend/src/scripts/seedAdmin.js
 ```
 
-This creates (or updates) a `super_admin` account in the database. **Change the credentials immediately after seeding** — the script is intended only for initial platform bootstrapping.
+On first run the script creates a new `super_admin` account. If an account with that email already exists, the script updates it to the `admin` role (not `super_admin`) and resets its password. Change the credentials immediately after seeding — the script is intended only for initial platform bootstrapping.
 
 ### Roles and Role Hierarchy
 
